@@ -33,6 +33,11 @@ _LEVEL_META = {
 
 _LEVEL_ORDER = ("session", "weekly", "monthly")
 
+#: 火山方舟小时额度（5h 窗口）规则：重置后不立即开始计时，而是在「重置后首次调用」时才
+#: 滚动计时（见 tests/volcengine.md）。因此官方 ``ResetTimestamp`` 换算出的倒计时会误导
+#: 用户（未调用时实际并未计时），统一改用固定文案说明该规则。
+_HOURLY_RESET_NOTE = "将会在首次调用后进行重置计时"
+
 
 def _num(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
@@ -107,6 +112,7 @@ def parse_coding_plan_usage(payload: dict[str, Any]) -> tuple[list[QuotaWindow],
                 # 否则 build_board 会把 limit 累加，文字模式会误报"绝对剩余 0/300"。
                 reset_label=_reset_label(reset_ts),
                 reset_at=reset_ts,
+                reset_note=_HOURLY_RESET_NOTE if level == "session" else "",
                 direction="used",
             )
         )
@@ -147,7 +153,9 @@ def parse_agent_plan_usage(payload: dict[str, Any]) -> list[QuotaWindow]:
         windows.append(QuotaWindow(
             id=window_id, label=label, used_percent=used_percent,
             remaining_percent=max(0.0, 100.0 - used_percent),
-            reset_label=_reset_label(reset_ts), reset_at=reset_ts, direction="used",
+            reset_label=_reset_label(reset_ts), reset_at=reset_ts,
+            reset_note=_HOURLY_RESET_NOTE if field == "AFPFiveHour" else "",
+            direction="used",
         ))
     return windows
 
