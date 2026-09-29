@@ -41,6 +41,13 @@ from ..qoder.provider import collect_board as collect_qoder_board
 
 from .common import CPA_ADMIN, _require_one_across, _text, _without, send_help
 
+try:
+    from nonebot.log import logger
+except Exception:  # pragma: no cover
+    import logging
+
+    logger = logging.getLogger("QuotaNoa.commands.quota")
+
 #: 合并转发目标适配器名（NoneBot OneBot V11 适配器 ``get_name()`` 返回值）。
 ONEBOT11_ADAPTER = "OneBot V11"
 
@@ -872,7 +879,8 @@ async def _send_quota_results(
         try:
             packed = await render_board_images(item)
         except RenderError as exc:
-            outgoing.append((f"{label}{exc}\n已回退为文字总览。" if label else f"{exc}\n已回退为文字总览。", None))
+            # 出图失败只写终端日志，聊天里静默回退为文字总览。
+            logger.warning(f"[{name}] 额度图渲染失败，已回退为文字总览：{exc}")
             chunks = format_quota_board(item)
             outgoing.extend((f"{label}{chunk}" if label else chunk, None) for chunk in chunks)
             continue

@@ -17,7 +17,7 @@ uv run playwright install chromium
 uv run nb run
 ```
 
-未执行 `uv run playwright install chromium` 时，`/quotanoa` 会回退纯文字，也可设 `cpa.quota_image=false` 或加 `--text`。
+未执行 `uv run playwright install chromium` 时，`/quotanoa` 会回退纯文字，也可设 `cpa.quota_image=false` 或加 `--text`。出图失败的原因只写终端日志，不在聊天里提示。
 
 ## 配置
 
@@ -146,7 +146,7 @@ Bot 与 CPA 不在同一台机器时，CPA 需要 `remote-management.allow-remot
 | --- | --- |
 | `/quotanoa` | **默认**先查本地渠道（火山 / WorkBuddy / Qoder），再追加 `quotanoa_additional_channel` 里的渠道；多实例时 CPA 结果按 `[实例名]` 前缀区分 |
 | `/quotanoa all` | 查询**全部渠道**：本地渠道 + 全部 CPA 平台（同义 `--all` / `-a`，与 `/cpa quota all` 内容一致） |
-| `/quotanoa help` | 查看帮助图（同义 `--help` / `-h`；加 `--text` 只发文字）。帮助图主题跟随 `render.theme`（`/quotanoa theme`），渲染失败自动回退文字 |
+| `/quotanoa help` | 查看帮助图（同义 `--help` / `-h`；加 `--text` 只发文字）。帮助图主题跟随 `render.theme`（`/quotanoa theme`），渲染失败自动回退文字（原因只写终端日志，不在聊天里提示） |
 | `/quotanoa <平台>` | 只看一个平台：`claude` / `codex`(gpt, openai) / `antigravity`(反重力, agy) / `kimi` / `xai` / `workbuddy`(wb) / `qoder` |
 | `/quotanoa 火山` | 查询火山方舟 Coding Plan + Agent Plan 额度（档位、用量、订阅到期；同义：`volc` / `volcengine` / `ark` / `火山方舟`） |
 | `/quotanoa workbuddy` | 查询全部 WorkBuddy 网关的积分额度（同义：`wb`） |
@@ -277,11 +277,11 @@ themes/<主题名>/
 
 默认主题的 canonical 名称为 `default`。旧配置中的 `"theme": "shadcn"` 会自动兼容并解析为 `default`。主题和卡片布局保存在 `data/quotanoa_config.json` 的 `render` 段（默认 `cards_per_row` 为 3、`max_cards_per_channel` 为 40，可用 `/quotanoa theme`、`/quotanoa card row`、`/quotanoa card max` 修改），不使用主题相关环境变量。
 
-未安装 Chromium 时会自动回退文字，并提示执行 `playwright install chromium`（推荐：`uv run playwright install chromium`）。`cpa.quota_image=false` 或 `/quotanoa --text` 可强制只要文字。
+未安装 Chromium 时会自动回退文字，并提示执行 `playwright install chromium`（推荐：`uv run playwright install chromium`）。`cpa.quota_image=false` 或 `/quotanoa --text` 可强制只要文字。出图失败时聊天里静默回退为文字总览，失败原因只写终端日志。
 
 ### 帮助图与字段高亮
 
-`/quotanoa help`（`--help` / `-h`）与裸 `/cpa` 默认把帮助排版成单张图片发送（无前置文字标题），沿用**同一套主题资源**（`base.css` + 各主题 `theme.css` + `help.css`），因此 `/quotanoa theme set mac` 之后帮助图也是 mac 风格。渲染失败（未装 Chromium 等）自动回退纯文字帮助，加 `--text`（如 `/quotanoa help --text`、`/cpa --text`）可强制只要文字。发送额度卡图片与帮助图时均不再附带前置文本消息。
+`/quotanoa help`（`--help` / `-h`）与裸 `/cpa` 默认把帮助排版成单张图片发送（无前置文字标题），沿用**同一套主题资源**（`base.css` + 各主题 `theme.css` + `help.css`），因此 `/quotanoa theme set mac` 之后帮助图也是 mac 风格。渲染失败（未装 Chromium 等）自动回退纯文字帮助（失败原因只写终端日志，不在聊天里提示），加 `--text`（如 `/quotanoa help --text`、`/cpa --text`）可强制只要文字。发送额度卡图片与帮助图时均不再附带前置文本消息。
 
 帮助图与额度卡错误框共用一套**可复用字段高亮**（`plugins/QuotaNoa/render/highlight.py`）：把命令（`cmd`）、占位参数（`arg`）、开关（`opt`）、配置键（`key`）、告警（`warn`）在文本里自动标出。任意文本一行调用 `highlight_html(text)` 即可套用（输出已转义），配色由各主题的 `--hl-*` 变量决定。
 

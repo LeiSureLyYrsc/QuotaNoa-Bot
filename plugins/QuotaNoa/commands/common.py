@@ -29,6 +29,13 @@ from ..model import normalize_channel
 from ..render.help_page import render_help_images
 from ..render.html import RenderError
 
+try:
+    from nonebot.log import logger
+except Exception:  # pragma: no cover
+    import logging
+
+    logger = logging.getLogger("QuotaNoa.commands.common")
+
 #: CPA 平台/渠道关键字（供 alias set 校验渠道名时复用）。
 KNOWN_CHANNELS = (
     "claude / codex(gpt, openai) / antigravity(反重力, agy) / kimi / xai / gemini-cli / 火山(volcengine, ark) / workbuddy(wb) / qoder"
@@ -82,7 +89,9 @@ async def send_help(doc: HelpDoc, *, text: bool, render=render_help_images) -> N
     try:
         _theme, images = await render(doc)
     except Exception as exc:  # RenderError 及兜底
-        await UniMessage(f"{doc.to_text()}\n\n（帮助图渲染失败，已回退为文字帮助：{exc}）").finish()
+        # 出图失败只写终端日志，聊天里静默回退为纯文字。
+        logger.warning(f"帮助图渲染失败，已回退为文字帮助：{exc}")
+        await UniMessage(doc.to_text()).finish()
         return
     if not images:
         await UniMessage(doc.to_text()).finish()
