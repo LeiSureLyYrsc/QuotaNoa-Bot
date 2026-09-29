@@ -33,14 +33,12 @@ driver = get_driver()
 @driver.on_startup
 async def _startup() -> None:
     # 惰性加载配置快照，尽早暴露配置错误。
-    state.get_snapshot()
+    snapshot = state.get_snapshot()
     # 预生成别名文件模板，方便用户直接编辑（支持热重载）。
     ensure_aliases_file()
-    # 远程客户端服务端（Server 模式）：仅在启用时启动独立 FastAPI。
-    cfg = state.client_server_config()
-    registry = state.get_client_registry()
-    if cfg.enabled:
-        await get_hub().start(cfg, registry)
+    # 远程客户端服务端（Server 模式）：独立开关 server.enabled（默认关）。
+    if snapshot.server.enabled:
+        await get_hub().start(snapshot.server, state.client_registry(snapshot))
 
 
 @driver.on_shutdown

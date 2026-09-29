@@ -1,9 +1,10 @@
 """远程客户端 Hub：独立 FastAPI 服务端（不与 NoneBot 共享同一 FastAPI 实例）。
 
-- 监听参数来自 `.env` 的 ``QUOTANOA_CLIENT_*``（``ClientServerConfig``）；改动需重启。
-- 客户端注册表来自 ``data/quotanoa_client.json``（缺失=空，**不自动生成**）。
+- 监听参数来自 ``data/quotanoa_config.json`` 的 ``server`` 段；``enabled`` 支持热切换，
+  host/port 等监听参数变更需重启生效。
+- 客户端列表来自主配置的 ``clients`` 段（默认空）。
 - 协议 v2。刷新能力以**客户端本地配置**为准：服务端只做「额外关闭」
-  （注册表 ``allow_refresh`` 且会话上报 ``capabilities.refresh``），
+  （客户端 ``allow_refresh`` 且会话上报 ``capabilities.refresh``），
   客户端即使收到刷新请求也会在本地再次拒绝。
 
 本模块属根模块，只依赖 ``config`` / ``protocol``；对 fastapi/uvicorn 的导入一律延迟。
@@ -86,6 +87,7 @@ class Hub:
         self._task: "asyncio.Task[None] | None" = None
         self._cfg: ClientServerConfig | None = None
         self._registry: ClientRegistry | None = None
+        self._listener_signature: tuple[Any, ...] | None = None
 
     # ------------------------------------------------------------------ #
     # 生命周期 / 配置
@@ -126,6 +128,7 @@ class Hub:
 
         self._cfg = cfg
         self._registry = registry
+        self._listener_signature = listener_slice(cfg)
         app = self.create_app(cfg, registry)
         config = uvicorn.Config(
             app,
@@ -163,6 +166,23 @@ class Hub:
                 self._task.cancel()
             self._task = None
         self._server = None
+
+    async def reconcile(self) -> None:
+        """按当前 ``self._cfg.enabled`` 热启停；监听参数变化仅告警需重启。
+
+        由 ``state`` 在 ``server.enabled`` 变化时调度。使用已 ``configure`` 的
+        ``self._cfg`` / ``self._registry``。
+        """
+        cfg = self._cfg
+        if cfg is None:
+            return
+        running = self._task is not None and not self._task.done()
+        if running and self._listener_signature is not None and self._listener_signature != listener_slice(cfg):
+            logger.warning("远程客户端服务端监听参数已变更，需重启 Bot 生效。")
+        if cfg.enabled and not running:
+            await self.start(cfg, self._registry or ClientRegistry())
+        elif not cfg.enabled and running:
+            await self.stop()
 
     # ------------------------------------------------------------------ #
     # 查询 / 刷新
@@ -397,6 +417,18 @@ class Hub:
                 self._sessions.pop(session.name, None)
         await _fail_pending(session, reason)
         logger.info(f"客户端已断开：{session.name}")
+
+
+def listener_slice(cfg: ClientServerConfig) -> tuple[Any, ...]:
+    """监听相关参数指纹：变化需重启才能生效。"""
+    return (
+        cfg.server_name,
+        cfg.host,
+        cfg.port,
+        cfg.request_timeout,
+        cfg.ws_max_size,
+        cfg.max_accounts,
+    )
 
 
 _hub = Hub()

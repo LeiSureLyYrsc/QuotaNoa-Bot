@@ -206,6 +206,13 @@ quota = on_alconna(
                 dest="remove",
                 help_text="删除客户端实例",
             ),
+            Subcommand(
+                "server",
+                Subcommand("on", help_text="开启远程客户端服务端（热切换）"),
+                Subcommand("off", help_text="关闭远程客户端服务端（热切换）"),
+                Subcommand("show", help_text="查看服务端监听设置与在线客户端"),
+                help_text="服务端开关与监听设置",
+            ),
             help_text="远程客户端管理",
         ),
         Subcommand(

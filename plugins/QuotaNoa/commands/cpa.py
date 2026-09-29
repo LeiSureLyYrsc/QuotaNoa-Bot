@@ -432,7 +432,7 @@ async def codex_refresh(
     if not _can_refresh_codex(event):
         await UniMessage("未配置 codex_refresh_admin，或你不在名单中，无法刷新。").finish()
         return
-    server = state.client_server_config()
+    server = state.get_snapshot().server
     server_name = normalize_client_name(server.server_name)
     client_param = _text(client) if client.available else ""
     target = normalize_client_name(client_param) if client_param else ""
@@ -442,7 +442,7 @@ async def codex_refresh(
         if not account_query:
             await UniMessage("查询词不能为空。").finish()
             return
-        known = get_hub().known_names(state.get_client_registry())
+        known = get_hub().known_names(state.client_registry())
         if target not in known:
             await UniMessage(f"未知客户端：{client_param}").finish()
             return

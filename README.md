@@ -142,28 +142,28 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 
 ### 服务端（Bot）
 
-在 `.env` 中启用并配置监听（改动需重启）：
-
-```env
-QUOTANOA_CLIENT_SERVER_ENABLED=true
-QUOTANOA_CLIENT_SERVER_NAME=Server          # 本机保留名
-QUOTANOA_CLIENT_HOST=127.0.0.1
-QUOTANOA_CLIENT_PORT=8320
-# QUOTANOA_CLIENT_REQUEST_TIMEOUT=40
-# QUOTANOA_CLIENT_WS_MAX_SIZE=1048576
-# QUOTANOA_CLIENT_MAX_ACCOUNTS=200
-# QUOTANOA_CLIENT_FILE=data/quotanoa_client.json
-```
-
-客户端实例注册表 `data/quotanoa_client.json` **不会**随启动自动生成，只在 `/quotanoa client add` 时创建：
+服务端监听设置与客户端列表都存在 `data/quotanoa_config.json`（首次启动自动生成，**服务器模式默认关**）：
 
 ```jsonc
 {
+  // ...其余业务配置...
+  "server": {
+    "enabled": false,          // 独立开关；可用 /quotanoa client server on 热开启
+    "server_name": "Server",   // 本机保留名
+    "host": "127.0.0.1",
+    "port": 8320,
+    "request_timeout": 40.0,
+    "ws_max_size": 1048576,
+    "max_accounts": 200
+  },
   "clients": [
     { "name": "Home", "key": "<随机密钥>", "allow_refresh": false, "note": "" }
   ]
 }
 ```
+
+- `server.enabled` 支持热切换（`/quotanoa client server on|off`）；`host`/`port` 等监听参数变更需重启 Bot。
+- `clients` 默认空；`/quotanoa client add` 自动追加。
 
 客户端通过 `WS /v1/client/ws` 连接，携带 `Authorization: Bearer <key>` 与 `X-CPA-Client-Name: <名称>`；协议 v2，握手时上报 agent 版本与刷新能力。
 
@@ -171,7 +171,9 @@ QUOTANOA_CLIENT_PORT=8320
 
 | 命令 | 作用 |
 | --- | --- |
-| `/quotanoa client add <名称> [--key K] [--allow-refresh] [--note N]` | 创建客户端实例（生成密钥与配置文件） |
+| `/quotanoa client server on` / `off` | 开启 / 关闭远程客户端服务端（热切换） |
+| `/quotanoa client server show` | 查看监听设置与在线客户端 |
+| `/quotanoa client add <名称> [--key K] [--allow-refresh] [--note N]` | 创建客户端实例（写入 `clients`） |
 | `/quotanoa client list` | 列出客户端与在线状态、agent 版本、刷新能力 |
 | `/quotanoa client show <名称>` | 查看详情（密钥脱敏） |
 | `/quotanoa client key <名称> [--rotate]` | 查看 / 轮换密钥 |
@@ -183,10 +185,10 @@ QUOTANOA_CLIENT_PORT=8320
 ### 刷新双重门禁
 
 - 客户端本地配置 `refresh.enabled` 默认 **false**；握手时向服务端上报 `capabilities.refresh`。
-- 服务端仅在「注册表 `allow_refresh=true`」且「会话上报允许」时才发起 `codex.refresh`。
+- 服务端仅在「`clients` 中该客户端 `allow_refresh=true`」且「会话上报允许」时才发起 `codex.refresh`。
 - 即使服务端伪造状态发起请求，客户端也以**本地配置为准**直接拒绝，且零网络副作用。
 
-公网部署建议：Bot 的 `QUOTANOA_CLIENT_HOST` 保持 `127.0.0.1`，用 Caddy/Nginx 提供 TLS；客户端使用 `wss://`，每个客户端独立密钥。
+公网部署建议：`server.host` 保持 `127.0.0.1`，用 Caddy/Nginx 提供 TLS；客户端使用 `wss://`，每个客户端独立密钥。
 
 ## 命令
 

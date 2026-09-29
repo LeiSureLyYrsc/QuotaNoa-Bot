@@ -91,6 +91,27 @@ async def quota_config_show() -> None:
             lines.append(f"  {name}：{channels[name]:g}s")
     else:
         lines.append("  （无渠道级覆盖，全部用 default）")
+    server = snapshot.server
+    lines.extend(
+        [
+            "",
+            "server（远程客户端服务端）：",
+            f"  enabled：{server.enabled}",
+            f"  server_name：{server.server_name}",
+            f"  listen：{server.host}:{server.port}",
+            f"  request_timeout：{server.request_timeout:g}s  "
+            f"ws_max_size：{server.ws_max_size}  max_accounts：{server.max_accounts}",
+        ]
+    )
+    if snapshot.clients:
+        lines.append("clients：")
+        for client in snapshot.clients:
+            key = mask_secret(client.key) if client.key else "（未设置）"
+            lines.append(
+                f"  - {client.name}  key={key}  allow_refresh={client.allow_refresh}"
+            )
+    else:
+        lines.append("clients：（无）")
     error = state.last_error()
     if error:
         lines.append("")

@@ -18,17 +18,13 @@ from typing import Any, Callable, Mapping
 
 from . import config as config_module
 from .config import (
-    DEFAULT_CLIENT_CONFIG_FILE,
     DEFAULT_CONFIG_FILE,
     ClientRegistry,
-    ClientServerConfig,
     ConfigError,
     ConfigSnapshot,
     Config,
-    read_client_config_file,
     read_config_file,
     snapshot_from_raw,
-    write_client_config_file,
 )
 
 try:
@@ -50,12 +46,6 @@ _memory_only = False
 
 _env_config: Config | None = None
 _path_override: Path | None = None
-
-#: 远程客户端注册表（``data/quotanoa_client.json``）内存快照。
-_client_path_override: Path | None = None
-_client_registry: ClientRegistry | None = None
-_client_signature: tuple[int, int] | None = None
-_client_server_cfg: ClientServerConfig | None = None
 
 
 def register_reload_hook(hook: Callable[[ConfigSnapshot], None]) -> None:
@@ -84,138 +74,47 @@ def config_file_path() -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# 远程客户端注册表 / 服务端监听设置
+# 远程客户端服务端（Server 模式）
 # --------------------------------------------------------------------------- #
 
 
-def client_config_path() -> Path:
-    """解析客户端注册表文件的绝对路径（``QUOTANOA_CLIENT_FILE``）。"""
-    global _env_config
-    if _client_path_override is not None:
-        return _client_path_override
-    raw = DEFAULT_CLIENT_CONFIG_FILE
-    try:
-        if _env_config is None:
-            from nonebot import get_plugin_config
-
-            _env_config = get_plugin_config(Config)
-        env_config = _env_config
-        if env_config is not None:
-            raw = env_config.quotanoa_client_file or DEFAULT_CLIENT_CONFIG_FILE
-    except Exception:
-        raw = DEFAULT_CLIENT_CONFIG_FILE
-    return Path(raw).expanduser().resolve()
+def client_registry(snapshot: ConfigSnapshot | None = None) -> ClientRegistry:
+    """从配置快照派生客户端内存视图（持久化在主配置的 ``clients``）。"""
+    data = snapshot if snapshot is not None else get_snapshot()
+    return ClientRegistry(clients=data.clients)
 
 
-def client_server_config() -> ClientServerConfig:
-    """从 `.env`（插件 Config）构建客户端服务端监听设置，并做范围钳制。"""
-    global _env_config, _client_server_cfg
-    if _client_server_cfg is not None:
-        return _client_server_cfg
-    try:
-        if _env_config is None:
-            from nonebot import get_plugin_config
+def _sync_client_hub(snapshot: ConfigSnapshot, previous: ConfigSnapshot | None = None) -> None:
+    """把服务端设置与客户端列表同步给 Hub。
 
-            _env_config = get_plugin_config(Config)
-    except Exception:
-        _env_config = None
-    env_config = _env_config
-    if env_config is None:
-        cfg = ClientServerConfig()
-    else:
-        from .protocol import normalize_client_name, valid_client_name
-
-        server_name = normalize_client_name(env_config.quotanoa_client_server_name or "")
-        if not valid_client_name(server_name):
-            server_name = config_module.DEFAULT_CLIENT_SERVER_NAME
-        host = str(env_config.quotanoa_client_host or "").strip() or config_module.DEFAULT_CLIENT_HOST
-        port = max(1, min(65535, int(env_config.quotanoa_client_port or config_module.DEFAULT_CLIENT_PORT)))
-        timeout = max(1.0, float(env_config.quotanoa_client_request_timeout or config_module.DEFAULT_CLIENT_REQUEST_TIMEOUT))
-        ws_max_size = max(1024, int(env_config.quotanoa_client_ws_max_size or config_module.DEFAULT_CLIENT_WS_MAX_SIZE))
-        max_accounts = max(1, int(env_config.quotanoa_client_max_accounts or config_module.DEFAULT_CLIENT_MAX_ACCOUNTS))
-        cfg = ClientServerConfig(
-            enabled=bool(env_config.quotanoa_client_server_enabled),
-            server_name=server_name,
-            host=host,
-            port=port,
-            request_timeout=timeout,
-            ws_max_size=ws_max_size,
-            max_accounts=max_accounts,
-        )
-    _client_server_cfg = cfg
-    return cfg
-
-
-def _read_client_signature(path: Path) -> tuple[int, int] | None:
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    return (stat.st_mtime_ns, stat.st_size)
-
-
-def _sync_client_hub() -> None:
-    """把当前监听设置与注册表同步给 Hub（不触发注册表重载，避免递归）。"""
-    if _client_registry is None:
-        return
+    - 客户端列表 / 监听参数：直接 ``configure``（列表热生效）。
+    - ``server.enabled`` 变化：在事件循环中调度 Hub 启停（热切换）。
+    - 监听参数变化且 Hub 正在运行：由 ``Hub.reconcile`` 告警需重启。
+    """
     try:
         from .clienthub import get_hub
 
-        get_hub().configure(client_server_config(), _client_registry)
+        get_hub().configure(snapshot.server, ClientRegistry(clients=snapshot.clients))
+        if previous is not None and previous.server.enabled != snapshot.server.enabled:
+            _schedule_hub_reconcile()
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"同步远程客户端 Hub 配置失败：{exc}")
 
 
-def get_client_registry() -> ClientRegistry:
-    """返回客户端注册表内存快照；文件缺失=空注册表（**不生成文件**）。"""
-    global _client_registry, _client_signature, _last_error
-    with _lock:
-        if _memory_only:
-            if _client_registry is None:
-                _client_registry = ClientRegistry()
-            _sync_client_hub()
-            return _client_registry
-        path = client_config_path()
-        signature = _read_client_signature(path)
-        if _client_registry is not None and signature == _client_signature:
-            return _client_registry
-        try:
-            registry = read_client_config_file(path)
-        except ConfigError as exc:
-            _last_error = str(exc)
-            if _client_registry is None:
-                _client_registry = ClientRegistry()
-            return _client_registry
-        _client_registry = registry
-        _client_signature = signature
-        _sync_client_hub()
-        return registry
+def _schedule_hub_reconcile() -> None:
+    """在运行中的事件循环里调度 Hub 启停；无循环（如导入期）时忽略。"""
+    import asyncio
 
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    try:
+        from .clienthub import get_hub
 
-def reload_client_registry() -> ClientRegistry:
-    """强制重新读取客户端注册表。"""
-    global _client_signature
-    with _lock:
-        if _memory_only:
-            return get_client_registry()
-        _client_signature = None
-        return get_client_registry()
-
-
-def save_client_registry(registry: ClientRegistry) -> ClientRegistry:
-    """原子写回客户端注册表（首次调用即生成文件），并刷新内存快照。"""
-    global _client_registry, _client_signature
-    with _lock:
-        if _memory_only:
-            _client_registry = registry
-            _sync_client_hub()
-            return registry
-        path = client_config_path()
-        write_client_config_file(path, registry)
-        _client_registry = registry
-        _client_signature = _read_client_signature(path)
-        _sync_client_hub()
-        return registry
+        loop.create_task(get_hub().reconcile())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"调度远程客户端服务端切换失败：{exc}")
 
 
 def _read_signature(path: Path) -> tuple[int, int] | None:
@@ -374,6 +273,8 @@ def _invalidate(snapshot: ConfigSnapshot, previous: ConfigSnapshot | None = None
             reset_client()
         except Exception as exc:
             logger.warning(f"配置重载后重建 HTTP 客户端失败：{exc}")
+    # 远程客户端服务端：同步设置/列表，并在 enabled 变化时热启停。
+    _sync_client_hub(snapshot, previous)
     for hook in list(_hooks):
         try:
             hook(snapshot)
