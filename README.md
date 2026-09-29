@@ -281,7 +281,7 @@ themes/<主题名>/
 
 ### 帮助图与字段高亮
 
-`/quotanoa help`（`--help` / `-h`）与裸 `/cpa` 默认把帮助排版成单张图片发送（无前置文字标题），沿用**同一套主题资源**（`base.css` + 各主题 `theme.css` + `help.css`），因此 `/quotanoa theme set mac` 之后帮助图也是 mac 风格。渲染失败（未装 Chromium 等）自动回退纯文字帮助（失败原因只写终端日志，不在聊天里提示），加 `--text`（如 `/quotanoa help --text`、`/cpa --text`）可强制只要文字。发送额度卡图片与帮助图时均不再附带前置文本消息。
+`/quotanoa help`（`--help` / `-h`）与裸 `/cpa` 默认把帮助排版成单张图片发送（无前置文字标题），沿用**同一套主题资源**（`base.css` + 各主题 `theme.css` + `help.css`），因此 `/quotanoa theme set mac` 之后帮助图也是 mac 风格。渲染失败（未装 Chromium 等）自动回退纯文字帮助（失败原因只写终端日志，不在聊天里提示），加 `--text`（如 `/quotanoa help --text`、`/cpa --text`）可强制只要文字。发送额度卡图片时，**每个渠道会先发一条汇总文字**（如「Claude 额度 共 12 个账号 分 2 张图片显示」），随后是该渠道的图片；帮助图不带前置文字。
 
 帮助图与额度卡错误框共用一套**可复用字段高亮**（`plugins/QuotaNoa/render/highlight.py`）：把命令（`cmd`）、占位参数（`arg`）、开关（`opt`）、配置键（`key`）、告警（`warn`）在文本里自动标出。任意文本一行调用 `highlight_html(text)` 即可套用（输出已转义），配色由各主题的 `--hl-*` 变量决定。
 

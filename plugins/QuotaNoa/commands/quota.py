@@ -887,13 +887,15 @@ async def _send_quota_results(
         if not packed:
             outgoing.append((f"{label}没有可展示的额度账号。" if label else "没有可展示的额度账号。", None))
             continue
-        cache_note = " · 缓存" if item.cached else ""
+        sections = {section.platform: section for section in item.platforms}
         for key, images in packed:
             title = PLATFORM_TITLES.get(key, key)
             total = len(images)
-            for index, png in enumerate(images, start=1):
-                extra = f" {index}/{total}" if total > 1 else ""
-                outgoing.append((f"{label}{title} 额度{extra}{cache_note}", png))
+            section = sections.get(key)
+            account_n = len(section.accounts) if section is not None else 0
+            # 每个渠道一组只发一条文字提示，随后是该组的图片。
+            outgoing.append((f"{label}{title} 额度 共 {account_n} 个账号 分 {total} 张图片显示", None))
+            outgoing.extend(("", png) for png in images)
     if not outgoing:
         await UniMessage("没有可展示的额度账号。").finish()
         return
