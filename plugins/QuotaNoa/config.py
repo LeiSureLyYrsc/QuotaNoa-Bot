@@ -33,8 +33,10 @@ from .model import (
     is_channel_name,
     normalize_channel,
 )
+from .protocol import normalize_client_name, valid_client_name
 
 DEFAULT_CONFIG_FILE = "data/quotanoa_config.json"
+DEFAULT_CLIENT_CONFIG_FILE = "data/quotanoa_client.json"
 DEFAULT_ALIASES_FILE = "data/quotanoa_aliases.json"
 
 #: ``/quotanoa config fix`` 修补前备份旧配置的目录（相对当前工作目录）。
@@ -55,6 +57,14 @@ DEFAULT_REFRESH_CACHE_TTL = 60.0
 
 #: 实例名 / 渠道账号名的通用长度上限。
 MAX_NAME_LEN = 32
+
+#: 远程客户端（Server 模式）默认监听设置（可由 `.env` 的 ``QUOTANOA_CLIENT_*`` 覆盖）。
+DEFAULT_CLIENT_SERVER_NAME = "Server"
+DEFAULT_CLIENT_HOST = "127.0.0.1"
+DEFAULT_CLIENT_PORT = 8320
+DEFAULT_CLIENT_REQUEST_TIMEOUT = 40.0
+DEFAULT_CLIENT_WS_MAX_SIZE = 1_048_576
+DEFAULT_CLIENT_MAX_ACCOUNTS = 200
 
 
 class ConfigError(ValueError):
@@ -94,15 +104,28 @@ def valid_name(value: str) -> bool:
 class Config(BaseModel):
     """NoneBot 环境配置。
 
-    `.env` 里只保留这一项；其余配置都在 ``data/quotanoa_config.json``。
+    `.env` 里只保留这些项；其余业务配置都在对应 JSON。
     """
 
     quotanoa_config_file: str = DEFAULT_CONFIG_FILE
+    quotanoa_client_file: str = DEFAULT_CLIENT_CONFIG_FILE
+    quotanoa_client_server_enabled: bool = False
+    quotanoa_client_server_name: str = "Server"
+    quotanoa_client_host: str = "127.0.0.1"
+    quotanoa_client_port: int = 8320
+    quotanoa_client_request_timeout: float = 40.0
+    quotanoa_client_ws_max_size: int = 1048576
+    quotanoa_client_max_accounts: int = 200
 
     @field_validator("quotanoa_config_file")
     @classmethod
     def _normalize_path(cls, value: str) -> str:
         return str(value or "").strip() or DEFAULT_CONFIG_FILE
+
+    @field_validator("quotanoa_client_file")
+    @classmethod
+    def _normalize_client_file(cls, value: str) -> str:
+        return str(value or "").strip() or DEFAULT_CLIENT_CONFIG_FILE
 
 
 # --------------------------------------------------------------------------- #
@@ -307,6 +330,71 @@ class OnebotV11FeatureConfig:
     """
 
     forward_message: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# 远程客户端（Server 模式）
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class ClientServerConfig:
+    """独立客户端服务端（Server 模式）监听设置。
+
+    由 `.env` 的 ``QUOTANOA_CLIENT_*`` 控制；改动需重启生效。
+    """
+
+    enabled: bool = False
+    server_name: str = DEFAULT_CLIENT_SERVER_NAME
+    host: str = DEFAULT_CLIENT_HOST
+    port: int = DEFAULT_CLIENT_PORT
+    request_timeout: float = DEFAULT_CLIENT_REQUEST_TIMEOUT
+    ws_max_size: int = DEFAULT_CLIENT_WS_MAX_SIZE
+    max_accounts: int = DEFAULT_CLIENT_MAX_ACCOUNTS
+
+    def ws_url(self) -> str:
+        return f"ws://{self.host}:{self.port}/v1/client/ws"
+
+
+@dataclass(frozen=True)
+class ClientInstance:
+    """一个已注册的远程客户端。"""
+
+    name: str
+    key: str = ""
+    allow_refresh: bool = False
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class ClientRegistry:
+    """远程客户端注册表（``data/quotanoa_client.json``）。"""
+
+    clients: tuple[ClientInstance, ...] = ()
+
+    def get(self, name: str) -> ClientInstance | None:
+        """按名称取客户端（名称已规范化）；不存在返回 None。"""
+        wanted = normalize_client_name(name)
+        for client in self.clients:
+            if client.name == wanted:
+                return client
+        return None
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(client.name for client in self.clients)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "clients": [
+                {
+                    "name": client.name,
+                    "key": client.key,
+                    "allow_refresh": client.allow_refresh,
+                    "note": client.note,
+                }
+                for client in self.clients
+            ]
+        }
 
 
 @dataclass(frozen=True)
@@ -714,6 +802,57 @@ def ensure_config_file(path: Path) -> dict[str, Any]:
     data = default_config_dict()
     atomic_write_json(path, data)
     return data
+
+
+def client_default_dict() -> dict[str, Any]:
+    """客户端注册表的空默认结构（**不**自动写盘）。"""
+    return {"clients": []}
+
+
+def client_registry_from_raw(raw: Mapping[str, Any]) -> ClientRegistry:
+    """把原始 JSON 字典转换为客户端注册表。"""
+    data = _as_mapping(raw)
+    raw_clients = data.get("clients")
+    clients: list[ClientInstance] = []
+    seen: set[str] = set()
+    if isinstance(raw_clients, (list, tuple)):
+        for item in raw_clients:
+            entry = _as_mapping(item)
+            raw_name = _as_str(entry.get("name"))
+            name = normalize_client_name(raw_name)
+            if not name:
+                continue
+            if not valid_client_name(name):
+                raise ConfigError(
+                    f"客户端名称非法：{raw_name}（1–{MAX_NAME_LEN} 字符，不能含空白或 / \\）"
+                )
+            if name in seen:
+                raise ConfigError(f"客户端名称重复：{name}")
+            seen.add(name)
+            clients.append(
+                ClientInstance(
+                    name=name,
+                    key=_as_str(entry.get("key")),
+                    allow_refresh=_as_bool(entry.get("allow_refresh"), False),
+                    note=_as_str(entry.get("note")),
+                )
+            )
+    return ClientRegistry(clients=tuple(clients))
+
+
+def read_client_config_file(path: Path) -> ClientRegistry:
+    """读取客户端注册表。
+
+    文件不存在时返回**空注册表**（绝不自动生成）；存在但非法时抛 ``ConfigError``。
+    """
+    if not path.is_file():
+        return ClientRegistry()
+    return client_registry_from_raw(read_config_file(path))
+
+
+def write_client_config_file(path: Path, registry: ClientRegistry) -> None:
+    """原子写入客户端注册表（首次调用即生成文件）。"""
+    atomic_write_json(path, registry.to_dict())
 
 
 def deep_merge(base: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, Any]:

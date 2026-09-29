@@ -8,6 +8,7 @@ require("nonebot_plugin_alconna")
 from . import state as state  # noqa: E402
 from . import commands as commands  # noqa: E402, F401
 from .aliases import ensure_aliases_file  # noqa: E402
+from .clienthub import get_hub  # noqa: E402
 from .cpa.client import close_client  # noqa: E402
 from .cpa.oauth import cancel_all  # noqa: E402
 from .render.html import close_renderer  # noqa: E402
@@ -35,10 +36,16 @@ async def _startup() -> None:
     state.get_snapshot()
     # 预生成别名文件模板，方便用户直接编辑（支持热重载）。
     ensure_aliases_file()
+    # 远程客户端服务端（Server 模式）：仅在启用时启动独立 FastAPI。
+    cfg = state.client_server_config()
+    registry = state.get_client_registry()
+    if cfg.enabled:
+        await get_hub().start(cfg, registry)
 
 
 @driver.on_shutdown
 async def _shutdown() -> None:
+    await get_hub().stop()
     await cancel_all()
     await close_renderer()
     await close_client()

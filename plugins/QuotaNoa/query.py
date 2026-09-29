@@ -15,11 +15,13 @@ from typing import Mapping
 
 from .config import normalize_name, valid_name
 from .model import CHANNEL_ALIASES
+from .protocol import normalize_client_name, valid_client_name
 
 INSTANCE_FLAGS = {"--instance", "-i"}
 ALL_FLAGS = {"all", "--all", "-all", "-a"}
 FRESH_FLAGS = {"--fresh", "--refresh", "-f"}
 TEXT_FLAGS = {"--text", "-t"}
+CLIENT_FLAGS = {"--client", "-c"}
 
 
 def resolve_channel(value: str, extra: Mapping[str, str] | None = None) -> str:
@@ -45,6 +47,7 @@ class QuotaSelection:
     instance: str | None = None
     platform: str | None = None
     account: str | None = None
+    client: str | None = None
     fresh: bool = False
     text: bool = False
     all_channels: bool = False
@@ -88,6 +91,7 @@ def parse_quota_parts(
     text_mode = False
     all_channels = False
     explicit_instance: str | None = None
+    explicit_client: str | None = None
     positional: list[str] = []
     index = 0
     while index < len(parts):
@@ -106,6 +110,18 @@ def parse_quota_parts(
             if not valid_name(name):
                 return QuotaSelection(error=f"实例名称非法：{parts[index + 1]}")
             explicit_instance = name
+            index += 2
+            continue
+        if lowered in CLIENT_FLAGS:
+            if index + 1 >= len(parts):
+                return QuotaSelection(error="--client 需要客户端名称。")
+            raw_client = parts[index + 1]
+            if raw_client.strip().lower() == "all":
+                explicit_client = "all"
+            elif valid_client_name(raw_client):
+                explicit_client = normalize_client_name(raw_client)
+            else:
+                return QuotaSelection(error=f"客户端名称非法：{raw_client}")
             index += 2
             continue
         if lowered in FRESH_FLAGS:
@@ -167,6 +183,7 @@ def parse_quota_parts(
         instance=explicit_instance or instance_from_pos,
         platform=platforms[0] if platforms else None,
         account=accounts[0] if accounts else None,
+        client=explicit_client,
         fresh=fresh,
         text=text_mode,
         all_channels=all_channels,

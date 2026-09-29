@@ -36,7 +36,9 @@ from ..cpa.oauth import (
     submit_callback,
 )
 from ..cpa.quota import refresh_codex_quota
+from ..clienthub import HubError, get_hub
 from ..help import cpa_help_text, parse_help
+from ..protocol import normalize_client_name
 from ..query import TEXT_FLAGS, strip_quota_head, tokenize
 
 from .common import (
@@ -110,7 +112,8 @@ cpa = on_alconna(
             "codex",
             Subcommand(
                 "refresh",
-                Args["instance", str]["query", str],
+                Args["a", str]["b?", str],
+                Option("--client|-c", Args["client", str], dest="client", help_text="指定远程客户端（此时第 1 个位置参数为查询词）"),
                 help_text="消耗一次 Codex 重置次数并刷新额度",
             ),
             help_text="Codex 上游额度操作",
@@ -422,20 +425,47 @@ async def auth_delete(
 @cpa.assign("codex.refresh")
 async def codex_refresh(
     event: Event,
-    instance: Query[str] = Query("codex.refresh.instance"),
-    query: Query[str] = Query("codex.refresh.query"),
+    a: Query[str] = Query("codex.refresh.a"),
+    b: Query[str] = Query("codex.refresh.b"),
+    client: Query[str] = Query("codex.refresh.client.client"),
 ) -> None:
     if not _can_refresh_codex(event):
         await UniMessage("未配置 codex_refresh_admin，或你不在名单中，无法刷新。").finish()
         return
-    name = _text(instance)
-    account_query = _text(query)
-    if not account_query:
-        await UniMessage("查询词不能为空。").finish()
+    server = state.client_server_config()
+    server_name = normalize_client_name(server.server_name)
+    client_param = _text(client) if client.available else ""
+    target = normalize_client_name(client_param) if client_param else ""
+    # 远程客户端：cpa codex refresh <查询词> --client <客户端>
+    if client_param and target != server_name:
+        account_query = _text(a)
+        if not account_query:
+            await UniMessage("查询词不能为空。").finish()
+            return
+        known = get_hub().known_names(state.get_client_registry())
+        if target not in known:
+            await UniMessage(f"未知客户端：{client_param}").finish()
+            return
+        try:
+            res = await get_hub().refresh_codex(target, account_query)
+        except HubError as exc:
+            await UniMessage(str(exc)).finish()
+            return
+        extra = f"\n剩余重置次数：{res.remaining_credits}" if res.remaining_credits is not None else ""
+        await UniMessage(f"[客户端 {target}] {res.message}{extra}").finish()
         return
-    file = await _require_platform_account(name, "codex", account_query)
+    # 本机：cpa codex refresh <实例> <查询词>
+    if not b.available or not _text(b):
+        await UniMessage(
+            "用法：cpa codex refresh <实例> <查询词>\n"
+            "      或 cpa codex refresh <查询词> --client <客户端>"
+        ).finish()
+        return
+    instance_name = _text(a)
+    account_query = _text(b)
+    file = await _require_platform_account(instance_name, "codex", account_query)
     try:
-        message = await refresh_codex_quota(file, name)
+        message = await refresh_codex_quota(file, instance_name)
     except CPAError as exc:
         await UniMessage(str(exc)).finish()
         return

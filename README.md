@@ -136,6 +136,58 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 
 Bot 与 CPA 不在同一台机器时，CPA 需要 `remote-management.allow-remote: true`，或设置环境变量 `MANAGEMENT_PASSWORD`（会强制允许远程）。未配置任何管理密钥时，`/v0/management` 会 404。
 
+## 远程客户端（Server 模式）
+
+Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**，不与 NoneBot 共用），让位于其它机器 / NAT 后的 [QuotaNoa-Client](https://github.com/LeiSureLyYrsc/QuotaNoa-Client)（Go）主动连入，远程查询其本机 CLIProxyAPI 与本地渠道额度，并在受控条件下执行 Codex 重置。
+
+### 服务端（Bot）
+
+在 `.env` 中启用并配置监听（改动需重启）：
+
+```env
+QUOTANOA_CLIENT_SERVER_ENABLED=true
+QUOTANOA_CLIENT_SERVER_NAME=Server          # 本机保留名
+QUOTANOA_CLIENT_HOST=127.0.0.1
+QUOTANOA_CLIENT_PORT=8320
+# QUOTANOA_CLIENT_REQUEST_TIMEOUT=40
+# QUOTANOA_CLIENT_WS_MAX_SIZE=1048576
+# QUOTANOA_CLIENT_MAX_ACCOUNTS=200
+# QUOTANOA_CLIENT_FILE=data/quotanoa_client.json
+```
+
+客户端实例注册表 `data/quotanoa_client.json` **不会**随启动自动生成，只在 `/quotanoa client add` 时创建：
+
+```jsonc
+{
+  "clients": [
+    { "name": "Home", "key": "<随机密钥>", "allow_refresh": false, "note": "" }
+  ]
+}
+```
+
+客户端通过 `WS /v1/client/ws` 连接，携带 `Authorization: Bearer <key>` 与 `X-CPA-Client-Name: <名称>`；协议 v2，握手时上报 agent 版本与刷新能力。
+
+### 命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `/quotanoa client add <名称> [--key K] [--allow-refresh] [--note N]` | 创建客户端实例（生成密钥与配置文件） |
+| `/quotanoa client list` | 列出客户端与在线状态、agent 版本、刷新能力 |
+| `/quotanoa client show <名称>` | 查看详情（密钥脱敏） |
+| `/quotanoa client key <名称> [--rotate]` | 查看 / 轮换密钥 |
+| `/quotanoa client remove <名称> --yes` | 删除客户端实例 |
+| `/quotanoa --client <名称>` | 查询该客户端全部渠道（`--client all` 查全部在线客户端） |
+| `/quotanoa --all` | 本地渠道 + 全部 CPA 平台 + 全部在线客户端 |
+| `/cpa codex refresh <查询词> --client <名称>` | 远程消耗 1 次 Codex 重置次数 |
+
+### 刷新双重门禁
+
+- 客户端本地配置 `refresh.enabled` 默认 **false**；握手时向服务端上报 `capabilities.refresh`。
+- 服务端仅在「注册表 `allow_refresh=true`」且「会话上报允许」时才发起 `codex.refresh`。
+- 即使服务端伪造状态发起请求，客户端也以**本地配置为准**直接拒绝，且零网络副作用。
+
+公网部署建议：Bot 的 `QUOTANOA_CLIENT_HOST` 保持 `127.0.0.1`，用 Caddy/Nginx 提供 TLS；客户端使用 `wss://`，每个客户端独立密钥。
+
 ## 命令
 
 仅超级用户 / `cpa.admins` 可用。额度查询用 `/quotanoa`（必须带指令头 `/`）；CPA 管理用 `/cpa`（前缀可有可无）。

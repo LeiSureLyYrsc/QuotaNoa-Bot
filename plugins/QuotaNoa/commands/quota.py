@@ -92,8 +92,15 @@ class _QueryUnit:
 
 
 def _all_channels_plan() -> list[_QueryUnit]:
-    """全部渠道：本地渠道在前，随后全部 CPA 平台（/quotanoa all 与 /cpa quota all 共用）。"""
-    return [*(_QueryUnit("local", ch) for ch in LOCAL_CHANNELS), _QueryUnit("cpa_all")]
+    """全部渠道：本地渠道在前，随后全部 CPA 平台，最后全部在线远程客户端。
+
+    （/quotanoa all 与 /cpa quota all 共用。）
+    """
+    return [
+        *(_QueryUnit("local", ch) for ch in LOCAL_CHANNELS),
+        _QueryUnit("cpa_all"),
+        _QueryUnit("client_all"),
+    ]
 
 
 def _resolve_query_plan(configured, entry: str) -> list[_QueryUnit]:
@@ -173,6 +180,33 @@ quota = on_alconna(
             Subcommand("reload", help_text="强制重载配置"),
             Subcommand("fix", help_text="修补配置文件：补齐缺失项并备份旧文件"),
             help_text="配置查看与重载",
+        ),
+        Subcommand(
+            "client",
+            Subcommand("list", help_text="列出远程客户端与在线状态"),
+            Subcommand(
+                "add",
+                Args["name", str],
+                Option("--key", Args["key", str], dest="key", help_text="自定义密钥（默认随机生成）"),
+                Option("--allow-refresh", action=store_true, dest="allow_refresh", help_text="允许该客户端执行 Codex 刷新"),
+                Option("--note", Args["note", str], dest="note", help_text="备注"),
+                help_text="创建客户端实例：/quotanoa client add <名称> [--key K] [--allow-refresh]",
+            ),
+            Subcommand("show", Args["name", str], help_text="查看客户端详情（密钥脱敏）"),
+            Subcommand(
+                "key",
+                Args["name", str],
+                Option("--rotate", action=store_true, dest="rotate", help_text="重新生成密钥"),
+                help_text="查看/轮换客户端密钥",
+            ),
+            Subcommand(
+                "remove|rm|delete",
+                Args["name", str],
+                Option("--yes|-y", action=store_true, dest="yes", help_text="确认删除"),
+                dest="remove",
+                help_text="删除客户端实例",
+            ),
+            help_text="远程客户端管理",
         ),
         Subcommand(
             "volc",
@@ -436,6 +470,10 @@ async def quota_view(event: Event, *, entry: str = "quota") -> None:
     )
     if selection.error:
         await UniMessage(selection.error).finish()
+    # 远程客户端：--client <名称> / --client all 只查客户端。
+    if selection.client:
+        await _send_client_selection(snapshot, selection)
+        return
     # 火山方舟：本地渠道，凭据来自 volcengine.accounts。
     if selection.platform == "volcengine":
         await _send_volcengine_results(snapshot.cpa, selection)
@@ -575,8 +613,75 @@ def _no_channel_configured_text() -> str:
         "没有可查询的渠道。\n"
         "本地渠道：/quotanoa volc add <名称> <AK> <SK>、/quotanoa wb add …、/quotanoa qoder add …\n"
         "CPA 实例：/cpa instance add <名称> <base_url>\n"
+        "远程客户端：/quotanoa client add <名称>（需先在 .env 启用服务端）\n"
         "查看全部渠道：/quotanoa all"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 远程客户端查询
+# --------------------------------------------------------------------------- #
+
+
+def _online_client_names() -> list[str]:
+    try:
+        from ..clienthub import get_hub
+
+        return get_hub().online_names()
+    except Exception:  # noqa: BLE001 - Hub 不可用时不阻断本机查询
+        return []
+
+
+async def _client_board(name: str, selection: QuotaSelection) -> QuotaBoard:
+    from ..clienthub import get_hub
+    from ..remote import board_from_result
+
+    result = await get_hub().query_quota(
+        name,
+        platform=selection.platform,
+        account=selection.account,
+        fresh=selection.fresh,
+    )
+    return board_from_result(result)
+
+
+async def _append_client_result(
+    results: list[tuple[str, QuotaBoard | str]],
+    name: str,
+    selection: QuotaSelection,
+) -> None:
+    from ..clienthub import HubError
+
+    try:
+        board = await _client_board(name, selection)
+    except HubError as exc:
+        results.append((name, str(exc)))
+        return
+    except Exception as exc:  # noqa: BLE001 - 单客户端异常不阻断其它渠道
+        results.append((name, f"远程查询失败：{exc}"))
+        return
+    if board is None or not board.platforms:
+        return
+    results.append((name, board))
+
+
+async def _send_client_selection(snapshot, selection: QuotaSelection) -> None:
+    """`/quotanoa --client <名称>` 与 `--client all`：只查远程客户端。"""
+    if selection.client == "all":
+        names = _online_client_names()
+    else:
+        names = [selection.client] if selection.client else []
+    if not names:
+        await UniMessage("没有在线的远程客户端。查看：/quotanoa client list").finish()
+        return
+    await UniMessage("正在查询远程客户端额度，可能需要几秒…").send()
+    results: list[tuple[str, QuotaBoard | str]] = []
+    for name in names:
+        await _append_client_result(results, name, selection)
+    if not results:
+        await UniMessage("远程客户端没有返回额度。").finish()
+        return
+    await _send_quota_results(snapshot.cpa, results, want_text=selection.text, multi=len(results) > 1)
 
 
 async def _send_plan(
@@ -589,12 +694,20 @@ async def _send_plan(
     cpa = snapshot.cpa
     instances = list(cpa.names())
     has_local_unit = any(unit.kind == "local" for unit in plan)
-    if not instances and not has_local_unit:
+    has_client_unit = any(unit.kind.startswith("client") for unit in plan)
+    if not instances and not has_local_unit and not has_client_unit:
         await UniMessage(_no_channel_configured_text()).finish()
         return
     results: list[tuple[str, QuotaBoard | str]] = []
     await UniMessage("正在查询额度，可能需要几秒…").send()
     for unit in plan:
+        if unit.kind == "client":
+            await _append_client_result(results, unit.channel, selection)
+            continue
+        if unit.kind == "client_all":
+            for client_name in _online_client_names():
+                await _append_client_result(results, client_name, selection)
+            continue
         if unit.kind == "local":
             label = LOCAL_CHANNEL_LABELS.get(unit.channel, unit.channel)
             try:

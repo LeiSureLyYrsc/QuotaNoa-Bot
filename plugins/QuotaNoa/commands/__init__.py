@@ -14,6 +14,7 @@ from . import quota as quota  # noqa: E402, F401  (注册 /quotanoa 根 + 查询
 from . import alias as alias  # noqa: E402, F401  (注册 /quotanoa alias)
 from . import theme as theme  # noqa: E402, F401  (注册 /quotanoa theme / card)
 from . import config as config  # noqa: E402, F401  (注册 /quotanoa config)
+from . import client as client  # noqa: E402, F401  (注册 /quotanoa client 远程客户端管理)
 from . import wb as wb  # noqa: E402, F401  (注册 /quotanoa wb 网关管理)
 from . import qoder as qoder  # noqa: E402, F401  (注册 /quotanoa qoder 代理管理)
 from . import cpa as cpa  # noqa: E402, F401  (注册 /cpa 管理根)

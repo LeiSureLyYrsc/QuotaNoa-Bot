@@ -31,6 +31,9 @@ data/
 # Local tests (keep locally, untracked)
 tests/
 
+# Test scratch dirs (some tests leak mkdtemp dirs into the working dir)
+/tmp*/
+
 # Deepwork session state (git-local)
 .slim/deepwork/
 
