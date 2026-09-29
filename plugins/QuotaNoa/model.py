@@ -115,6 +115,7 @@ class PlatformQuota:
     window_labels: dict[str, str] = field(default_factory=dict)
     remaining_sum: float = 0.0
     limit_sum: float = 0.0
+    hidden: int = 0
 
 
 @dataclass

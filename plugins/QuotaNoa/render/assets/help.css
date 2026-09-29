@@ -1,0 +1,143 @@
+/* =========================================================
+   QUOTANOA HELP STYLING (help.css)
+   ========================================================= */
+
+.help-sheet {
+  box-sizing: border-box;
+}
+
+/* Inherit theme card background and styling, refining padding for document layout */
+.help-card {
+  padding: 16px 20px;
+  gap: 14px;
+}
+
+/* Header */
+.help-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.help-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: inherit;
+}
+
+.help-subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.78;
+}
+
+/* Sections */
+.help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.help-section + .help-section {
+  margin-top: 6px;
+}
+
+.help-section-title {
+  margin: 0 0 2px 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.01em;
+}
+
+.help-section-title::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 0.85em;
+  background: var(--hl-cmd, currentColor);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.help-section-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.12;
+}
+
+.help-section-intro {
+  margin: 0 0 2px 0;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.8;
+}
+
+/* Entries */
+.help-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 2px 0;
+  line-height: 1.45;
+}
+
+.help-usage {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.help-entry-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.82;
+  word-break: break-word;
+}
+
+.help-entry-detail {
+  flex-basis: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: 14px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  opacity: 0.7;
+  word-break: break-word;
+}
+
+/* Notes & Sub-notes */
+.help-note {
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0.82;
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid rgba(128, 128, 128, 0.28);
+  margin: 2px 0;
+  word-break: break-word;
+}
+
+.help-note-sub {
+  margin-left: 14px;
+  padding-left: 8px;
+  font-size: 11.5px;
+  opacity: 0.72;
+  border-left: 2px dashed rgba(128, 128, 128, 0.22);
+}

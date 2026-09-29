@@ -31,14 +31,15 @@ from ..cpa.quota import (
     peek_quota_cache,
     platform_of,
 )
+from ..help import parse_help, quota_help_text
 from ..model import LOCAL_CHANNELS, is_all_channels, normalize_channel
-from ..query import QuotaSelection, parse_quota_command, strip_quota_head, tokenize
+from ..query import QuotaSelection, TEXT_FLAGS, parse_quota_command, strip_quota_head, tokenize
 from ..render.html import RenderError, render_board_images
 from ..volcengine.provider import collect_board as collect_volcengine_board
 from ..wb.provider import collect_board as collect_workbuddy_board
 from ..qoder.provider import collect_board as collect_qoder_board
 
-from .common import CPA_ADMIN, _require_one_across, _text, _without
+from .common import CPA_ADMIN, _require_one_across, _text, _without, send_help
 
 #: 合并转发目标适配器名（NoneBot OneBot V11 适配器 ``get_name()`` 返回值）。
 ONEBOT11_ADAPTER = "OneBot V11"
@@ -57,8 +58,12 @@ HELP_TOKENS = {"help", "--help", "-h"}
 
 
 def _is_help_request(parts: Sequence[str]) -> bool:
-    """判断请求是否为查看帮助。"""
-    return len(parts) == 1 and parts[0].lower() in HELP_TOKENS
+    """请求是否查看帮助：首词是 help 令牌，其余只能是开关（如 --text）。"""
+    return bool(parts) and parts[0].lower() in HELP_TOKENS and all(p.startswith("-") for p in parts[1:])
+
+
+def _help_wants_text(parts: Sequence[str]) -> bool:
+    return any(p.lower() in TEXT_FLAGS for p in parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +157,7 @@ quota = on_alconna(
         Subcommand(
             "card",
             Subcommand("row", Args["count", str], help_text="设置每行卡片数：/quotanoa card row 1..6"),
+            Subcommand("max", Args["count", str], help_text="设置每渠道最多账号卡片数：/quotanoa card max <数量>"),
             help_text="查看或设置卡片布局排版",
         ),
         Subcommand(
@@ -244,8 +250,9 @@ async def quota_main(event: Event) -> None:
 
 
 @quota.assign("help")
-async def quota_help() -> None:
-    await UniMessage(_quota_help_text()).finish()
+async def quota_help(event: Event) -> None:
+    parts = strip_quota_head(tokenize(event.get_plaintext()))
+    await send_help(parse_help(quota_help_text()), text=_help_wants_text(parts))
 
 
 async def quota_entry(event: Event, *, entry: str = "quota") -> None:
@@ -260,85 +267,11 @@ async def quota_entry(event: Event, *, entry: str = "quota") -> None:
 
     查询：/quotanoa help（或 --help / -h）显示帮助。
     """
-    if _is_help_request(strip_quota_head(tokenize(event.get_plaintext()))):
-        await UniMessage(_quota_help_text()).finish()
+    parts = strip_quota_head(tokenize(event.get_plaintext()))
+    if _is_help_request(parts):
+        await send_help(parse_help(quota_help_text()), text=_help_wants_text(parts))
+        return
     await quota_view(event, entry=entry)
-
-
-# --------------------------------------------------------------------------- #
-# 帮助
-# --------------------------------------------------------------------------- #
-
-
-def _quota_help_text() -> str:
-    return "\n".join(
-        [
-            "QuotaNoa 额度查询（仅超级用户 / admins）",
-            "命令固定带 / 前缀（指令头）。",
-            "",
-            "【查询】默认优先展示本地渠道（火山 / WorkBuddy / Qoder）；多实例时 CPA 结果按 [实例名] 前缀区分。",
-            "  /quotanoa",
-            "    无参数：本地渠道（火山 / WorkBuddy / Qoder）+ quotanoa_additional_channel 追加的渠道。",
-            "    /cpa quota 无参：全部 CPA 平台 + cpa_additional_channel 追加的渠道。",
-            "    追加渠道写 all（或 *）时该入口直接输出全部渠道。",
-            "  /quotanoa all",
-            "    查询全部渠道：本地渠道 + 全部 CPA 平台（同义 --all / -a）。",
-            "  /quotanoa help",
-            "    查看本帮助（同义 --help / -h）。",
-            "  /quotanoa <平台>",
-            "    claude / codex(gpt, openai) / antigravity(反重力, agy) / kimi / xai / 火山(volcengine, ark) / workbuddy(wb) / qoder(qd)",
-            "  /quotanoa <实例>",
-            "    只查指定 CPA 实例。例：/quotanoa Home",
-            "  /quotanoa <平台> <实例>",
-            "    例：/quotanoa antigravity Home  或  /quotanoa Home antigravity",
-            "  /quotanoa <查询词>",
-            "    单个账号的额度卡（跨全部实例搜索）。",
-            "  /quotanoa --instance <实例>   显式指定实例，避免与渠道名冲突",
-            "  /quotanoa --fresh     忽略缓存，强制重查上游",
-            "  /quotanoa --text      只发文字总览（排障 / 无浏览器）",
-            "  /quotanoa cooling     只看冷却中的凭证（全部实例）",
-            "  /quotanoa reset <查询词>   清除配额/冷却并恢复路由（跨实例搜索）",
-            "",
-            "【别名】分渠道存储（data/quotanoa_aliases.json）。",
-            "  /quotanoa alias list [--disabled]",
-            "  /quotanoa alias set <渠道> <查询词> <别名>",
-            "    例：/quotanoa alias set antigravity user@example.com AG-1",
-            "    渠道名可用文件里的 channel_keywords 自定义（如 agy → antigravity）。",
-            "  /quotanoa alias del <查询词>    删除（跨渠道全部删除）",
-            "",
-            "【火山方舟】本地渠道，凭据存 data/quotanoa_config.json 的 volcengine.accounts。",
-            "  支持 Coding Plan 与 Agent Plan，双套餐额度合并为一张卡片展示（含 Coding/Agent 档位徽章与到期时间）。",
-            "  /quotanoa volc list",
-            "  /quotanoa volc add <名称> <AK> <SK> [region]",
-            "  /quotanoa volc remove <名称> --yes",
-            "",
-            "【WorkBuddy】本地渠道，网关存 data/quotanoa_config.json 的 workbuddy.servers。",
-            "  /quotanoa wb              查询全部网关额度（同 workbuddy）",
-            "  /quotanoa wb list",
-            "  /quotanoa wb add <名称> <base_url> --user U --pass P [--timeout N]",
-            "  /quotanoa wb login <名称>  校验账号密码并刷新会话",
-            "  /quotanoa wb remove <名称> --yes",
-            "",
-            "【Qoder】本地渠道，代理存 data/quotanoa_config.json 的 qoder.servers。",
-            "  /quotanoa qoder           查询全部代理号池额度（同 qd）",
-            "  /quotanoa qoder list",
-            "  /quotanoa qoder add <名称> <base_url> --key <API_KEY> [--timeout N]",
-            "  /quotanoa qoder remove <名称> --yes",
-            "",
-            "【主题与排版】修改后立刻生效并持久化。",
-            "  /quotanoa theme           查看当前主题与可选主题",
-            "  /quotanoa theme set <主题>",
-            "  /quotanoa card            查看每行卡片数",
-            "  /quotanoa card row N      设置每行卡片数（1..6）",
-            "",
-            "【配置】",
-            "  /quotanoa config show     查看生效配置（密钥脱敏）与最近解析错误",
-            "  /quotanoa config reload   强制从磁盘重载配置",
-            "  /quotanoa config fix      补齐缺失配置项（先备份旧文件到 data/backup/）",
-            "",
-            "【管理】CPA 实例 / 凭证 / 登录 / Codex 重置请用 /cpa。",
-        ]
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -884,11 +817,27 @@ def _build_forward_nodes(
     """把 ``(caption, png)`` 列表转为合并转发节点：文字与图片都在同一节点内容里。"""
     nodes: list[CustomNode] = []
     for caption, png in outgoing:
-        content: list[Any] = [Text(caption)]
-        if png is not None:
-            content.append(Image(raw=png, mimetype="image/png"))
+        if png is None:
+            content = [Text(caption)]
+        else:
+            content = [Image(raw=png, mimetype="image/png")]
         nodes.append(CustomNode(uid=uid, name=nickname, content=content))
     return nodes
+
+
+def _apply_channel_cap(board: QuotaBoard, limit: int) -> QuotaBoard:
+    """每渠道最多显示 limit 张账号卡片；超出截断并用 hidden 记录未显示数量（不改缓存对象）。"""
+    if limit <= 0 or not board.platforms:
+        return board
+    changed = False
+    sections = []
+    for section in board.platforms:
+        if len(section.accounts) > limit:
+            sections.append(replace(section, accounts=section.accounts[:limit], hidden=len(section.accounts) - limit))
+            changed = True
+        else:
+            sections.append(section)
+    return replace(board, platforms=sections) if changed else board
 
 
 async def _send_forwarded(bot: Bot, outgoing: Sequence[tuple[str, bytes | None]]) -> None:
@@ -907,8 +856,11 @@ async def _send_quota_results(
 ) -> None:
     prefix = multi
     pinned = _apply_pin_order(results, state.get_snapshot().pin_channel)
+    limit = state.get_snapshot().render.max_cards_per_channel
     outgoing: list[tuple[str, bytes | None]] = []
     for name, item in pinned:
+        if isinstance(item, QuotaBoard):
+            item = _apply_channel_cap(item, limit)
         if isinstance(item, str):
             outgoing.append((f"[{name}] {item}" if prefix else item, None))
             continue
@@ -942,15 +894,15 @@ async def _send_quota_results(
         await _send_forwarded(bot, outgoing)
         return
     for caption, png in outgoing[:-1]:
-        await UniMessage(caption).send()
-        if png is not None:
+        if png is None:
+            await UniMessage(caption).send()
+        else:
             await UniMessage(Image(raw=png, mimetype="image/png")).send()
     caption, png = outgoing[-1]
     if png is None:
         await UniMessage(caption).finish()
-        return
-    await UniMessage(caption).send()
-    await UniMessage(Image(raw=png, mimetype="image/png")).finish()
+    else:
+        await UniMessage(Image(raw=png, mimetype="image/png")).finish()
 
 
 def cpa_uses_image(cpa: CpaConfig, instance: str) -> bool:

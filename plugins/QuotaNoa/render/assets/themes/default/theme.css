@@ -18,6 +18,11 @@
   --sc-green-bg: #052e16;
   --sc-green-fg: #4ade80;
   --sc-green-border: #14532d;
+  --hl-cmd: #60a5fa;
+  --hl-arg: #c084fc;
+  --hl-opt: #4ade80;
+  --hl-key: #fbbf24;
+  --hl-warn: #f87171;
 
   background: var(--sc-bg);
   color: var(--sc-foreground);

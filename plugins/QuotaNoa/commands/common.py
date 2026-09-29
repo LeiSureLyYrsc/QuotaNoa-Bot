@@ -15,7 +15,7 @@ from typing import Any
 
 from nonebot.adapters import Bot, Event
 from nonebot.permission import SUPERUSER, Permission
-from nonebot_plugin_alconna import Query, UniMessage
+from nonebot_plugin_alconna import Image, Query, UniMessage
 
 from .. import state
 from ..cpa.client import CPAError, get_client
@@ -24,7 +24,10 @@ from ..cpa.format import (
     match_auth,
 )
 from ..cpa.quota import platform_of
+from ..help import HelpDoc
 from ..model import normalize_channel
+from ..render.help_page import render_help_images
+from ..render.html import RenderError
 
 #: CPA 平台/渠道关键字（供 alias set 校验渠道名时复用）。
 KNOWN_CHANNELS = (
@@ -69,6 +72,27 @@ def _without(*paths: str):
 def instance_names() -> tuple[str, ...]:
     """当前配置里的全部 CPA 实例名。"""
     return state.get_snapshot().cpa.names()
+
+
+async def send_help(doc: HelpDoc, *, text: bool, render=render_help_images) -> None:
+    """发送帮助：默认只发一张帮助图（主题跟随额度图主题），--text 或渲染失败回退纯文字。"""
+    if text:
+        await UniMessage(doc.to_text()).finish()
+        return
+    try:
+        _theme, images = await render(doc)
+    except Exception as exc:  # RenderError 及兜底
+        await UniMessage(f"{doc.to_text()}\n\n（帮助图渲染失败，已回退为文字帮助：{exc}）").finish()
+        return
+    if not images:
+        await UniMessage(doc.to_text()).finish()
+        return
+    for index, png in enumerate(images, start=1):
+        msg = UniMessage(Image(raw=png, mimetype="image/png"))
+        if index == len(images):
+            await msg.finish()
+        else:
+            await msg.send()
 
 
 # --------------------------------------------------------------------------- #

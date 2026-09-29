@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import html
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,10 +28,11 @@ from ..model import (
     window_is_used,
 )
 
+from .highlight import highlight_html
 from .themes import get_theme_registry
 
-DEFAULT_CARDS_PER_ROW = 4
-GRID_ROWS_PER_IMAGE = 2
+DEFAULT_CARDS_PER_ROW = 3
+GRID_ROWS_PER_IMAGE = 3
 CARDS_PER_IMAGE = 8
 
 
@@ -287,12 +289,16 @@ def build_summary_card_html(
 
     header_meta = f'<div class="card-meta-row">{rc_html}</div>' if rc_html else ""
 
+    hidden = int(getattr(section, "hidden", 0) or 0)
+    shown = len(all_accounts)
+    count_text = f"{shown + hidden} 个账号 · 仅显示 {shown}" if hidden > 0 else f"{shown} 个账号"
+
     return (
         f'<article class="card summary-card">'
         f'<div class="card-header">'
         f'<div class="title-row">'
         f'<div class="summary-brand-row">{icon_html}<h2 class="card-title summary-title">{html.escape(section.title)}</h2></div>'
-        f'<span class="summary-account-count">{len(all_accounts)} 个账号</span>'
+        f'<span class="summary-account-count">{count_text}</span>'
         f'</div>'
         f'{plan_chips_html}'
         f'{header_meta}'
@@ -360,7 +366,7 @@ def _card_html(account: AccountQuota) -> str:
         return (
             f'<article class="card">'
             f'{head}'
-            f'<div class="card-content"><div class="card-err-box">{html.escape(account.error)}</div></div>'
+            f'<div class="card-content"><div class="card-err-box">{highlight_html(account.error)}</div></div>'
             f'</article>'
         )
 
@@ -551,7 +557,12 @@ def build_platform_html(
     )
 
     full_css = (registry.base_css + "\n" + theme_obj.css).replace("__WIDTH__", str(canvas_w)).replace("__COLS__", str(cols))
-    return _TEMPLATE.replace("__CSS__", full_css).replace("__BODY__", body)
+    return compose_document(body=body, css=full_css)
+
+
+def compose_document(*, body: str, css: str) -> str:
+    """返回填充了 CSS 与 body 的完整 HTML 文档。"""
+    return _TEMPLATE.replace("__CSS__", css).replace("__BODY__", body)
 
 
 async def render_platform_images(section: PlatformQuota) -> list[bytes]:
@@ -577,7 +588,7 @@ async def render_platform_images(section: PlatformQuota) -> list[bytes]:
             theme=theme,
             cards_per_row=cols,
         )
-        images.append(await _screenshot(html_doc, width=canvas_w))
+        images.append(await screenshot_html(html_doc, width=canvas_w))
     return images
 
 
@@ -605,7 +616,7 @@ async def close_renderer() -> None:
             _playwright = None
 
 
-async def _screenshot(html_doc: str, width: int = 1080) -> bytes:
+async def screenshot_html(html_doc: str, width: int = 1080) -> bytes:
     async with _lock:
         browser = await _ensure_browser()
         context = await browser.new_context(
@@ -623,6 +634,66 @@ async def _screenshot(html_doc: str, width: int = 1080) -> bytes:
     return bytes(png)
 
 
+async def _screenshot(html_doc: str, width: int = 1080) -> bytes:
+    """向后兼容别名。"""
+    return await screenshot_html(html_doc, width=width)
+
+
+def _dir_is_writable(path: Path) -> bool:
+    """探测目录是否可写（创建后立即删除探针文件）。"""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".quotanoa-write-probe-{os.getpid()}-{time.time_ns()}"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _playwright_temp_dir() -> Path:
+    """返回 Playwright 驱动可写的临时目录。
+
+    某些 Windows 环境（安全软件 / 组策略 / %TEMP% 的 ACL 损坏）下，当前进程对
+    ``%TEMP%`` 没有写权限，Playwright 的 Node 驱动会在 ``mkdtemp`` 时抛出
+    ``EPERM: operation not permitted, mkdtemp '...\\playwright-artifacts-XXXXXX'``，
+    导致无法出图。这里回退到项目内可写的目录。
+    """
+    candidates: list[Path] = []
+    try:
+        from ..state import config_file_path
+
+        candidates.append(config_file_path().parent / "tmp")
+    except Exception:
+        pass
+    candidates.append(Path.cwd() / "data" / "tmp")
+    candidates.append(Path(__file__).resolve().parents[3] / ".tmp")
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "QuotaNoa" / "tmp")
+
+    for candidate in candidates:
+        if _dir_is_writable(candidate):
+            return candidate
+    raise RenderError(
+        "无法找到可写的临时目录（%TEMP% 不可写）。请检查安全软件限制或手动设置 TEMP/TMP 环境变量。"
+    )
+
+
+def _ensure_playwright_temp() -> None:
+    """在启动 Playwright 前保证 TEMP/TMP 指向可写目录。
+
+    Playwright 通过 ``os.environ`` 复制环境启动 Node 驱动，因此必须在
+    ``async_playwright().start()`` 之前设置。
+    """
+    current = os.environ.get("TEMP") or os.environ.get("TMP")
+    if current and _dir_is_writable(Path(current)):
+        return
+    writable = _playwright_temp_dir()
+    os.environ["TEMP"] = str(writable)
+    os.environ["TMP"] = str(writable)
+
+
 async def _ensure_browser() -> Any:
     global _playwright, _browser
     if _browser is not None:
@@ -637,6 +708,7 @@ async def _ensure_browser() -> Any:
         raise RenderError("未安装 playwright。请 uv sync 后执行 playwright install chromium。") from exc
     try:
         if _playwright is None:
+            _ensure_playwright_temp()
             _playwright = await async_playwright().start()
         _browser = await _playwright.chromium.launch(headless=True)
     except Exception as exc:

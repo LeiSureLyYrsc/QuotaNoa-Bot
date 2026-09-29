@@ -12,21 +12,27 @@ from typing import Any, Mapping
 from .themes import get_theme_registry
 
 DEFAULT_THEME = "default"
-DEFAULT_CARDS_PER_ROW = 4
+DEFAULT_CARDS_PER_ROW = 3
 MIN_CARDS_PER_ROW = 1
 MAX_CARDS_PER_ROW = 6
+
+DEFAULT_MAX_CARDS_PER_CHANNEL = 40
+MIN_MAX_CARDS_PER_CHANNEL = 1
+MAX_MAX_CARDS_PER_CHANNEL = 200
 
 
 @dataclass
 class RenderSettings:
     theme: str = DEFAULT_THEME
     cards_per_row: int = DEFAULT_CARDS_PER_ROW
+    max_cards_per_channel: int = DEFAULT_MAX_CARDS_PER_CHANNEL
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = dict(self.extra)
         data["theme"] = self.theme
         data["cards_per_row"] = self.cards_per_row
+        data["max_cards_per_channel"] = self.max_cards_per_channel
         return data
 
 
@@ -67,6 +73,26 @@ def normalize_cards_per_row_or_default(value: Any) -> int:
     return DEFAULT_CARDS_PER_ROW
 
 
+def normalize_max_cards_per_channel(value: Any) -> int:
+    try:
+        num = int(value)
+    except (ValueError, TypeError):
+        raise ValueError(f"每渠道最多账号卡片数必须为 {MIN_MAX_CARDS_PER_CHANNEL} 到 {MAX_MAX_CARDS_PER_CHANNEL} 的整数。")
+    if not (MIN_MAX_CARDS_PER_CHANNEL <= num <= MAX_MAX_CARDS_PER_CHANNEL):
+        raise ValueError(f"每渠道最多账号卡片数必须为 {MIN_MAX_CARDS_PER_CHANNEL} 到 {MAX_MAX_CARDS_PER_CHANNEL} 的整数。")
+    return num
+
+
+def normalize_max_cards_per_channel_or_default(value: Any) -> int:
+    try:
+        num = int(value)
+        if MIN_MAX_CARDS_PER_CHANNEL <= num <= MAX_MAX_CARDS_PER_CHANNEL:
+            return num
+    except (ValueError, TypeError):
+        pass
+    return DEFAULT_MAX_CARDS_PER_CHANNEL
+
+
 def _render_section() -> Mapping[str, Any]:
     from .. import state
 
@@ -74,6 +100,7 @@ def _render_section() -> Mapping[str, Any]:
     return {
         "theme": render.theme,
         "cards_per_row": render.cards_per_row,
+        "max_cards_per_channel": render.max_cards_per_channel,
     }
 
 
@@ -82,23 +109,38 @@ def get_render_settings() -> RenderSettings:
     return RenderSettings(
         theme=normalize_theme_or_default(section.get("theme")),
         cards_per_row=normalize_cards_per_row_or_default(section.get("cards_per_row")),
+        max_cards_per_channel=normalize_max_cards_per_channel_or_default(section.get("max_cards_per_channel")),
     )
 
 
-def _persist(theme: str, cards_per_row: int) -> RenderSettings:
+def _persist(theme: str, cards_per_row: int, max_cards_per_channel: int) -> RenderSettings:
     from .. import state
 
-    state.update_config({"render": {"theme": theme, "cards_per_row": cards_per_row}})
+    state.update_config(
+        {
+            "render": {
+                "theme": theme,
+                "cards_per_row": cards_per_row,
+                "max_cards_per_channel": max_cards_per_channel,
+            }
+        }
+    )
     return get_render_settings()
 
 
 def set_theme(theme_name: str) -> RenderSettings:
     target = normalize_theme(theme_name)
     current = get_render_settings()
-    return _persist(target, current.cards_per_row)
+    return _persist(target, current.cards_per_row, current.max_cards_per_channel)
 
 
 def set_cards_per_row(count: int | str) -> RenderSettings:
     target = normalize_cards_per_row(count)
     current = get_render_settings()
-    return _persist(current.theme, target)
+    return _persist(current.theme, target, current.max_cards_per_channel)
+
+
+def set_max_cards_per_channel(count: int | str) -> RenderSettings:
+    target = normalize_max_cards_per_channel(count)
+    current = get_render_settings()
+    return _persist(current.theme, current.cards_per_row, target)

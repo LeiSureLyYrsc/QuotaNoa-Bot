@@ -20,6 +20,11 @@
   --md3-success: #6dd58c;
   --md3-success-container: #0f5223;
   --md3-on-success-container: #c4eed0;
+  --hl-cmd: #d0bcff;
+  --hl-arg: #a8c7fa;
+  --hl-opt: #6dd58c;
+  --hl-key: #ffb784;
+  --hl-warn: #f2b8b5;
 
   background: var(--md3-bg);
   color: var(--md3-text);

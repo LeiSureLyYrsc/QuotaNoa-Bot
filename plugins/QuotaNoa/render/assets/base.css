@@ -434,3 +434,35 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* =========================================================
+   SYNTAX HIGHLIGHTING (.hl)
+   ========================================================= */
+.hl {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  display: inline;
+}
+
+.hl-cmd {
+  color: var(--hl-cmd, #2563eb);
+}
+
+.hl-arg {
+  color: var(--hl-arg, #7c3aed);
+  font-weight: 500;
+}
+
+.hl-opt {
+  color: var(--hl-opt, #059669);
+}
+
+.hl-key {
+  color: var(--hl-key, #b45309);
+}
+
+.hl-warn {
+  color: var(--hl-warn, #dc2626);
+  font-weight: 700;
+}
+

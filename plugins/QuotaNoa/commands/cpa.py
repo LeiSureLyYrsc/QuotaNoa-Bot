@@ -36,6 +36,8 @@ from ..cpa.oauth import (
     submit_callback,
 )
 from ..cpa.quota import refresh_codex_quota
+from ..help import cpa_help_text, parse_help
+from ..query import TEXT_FLAGS, strip_quota_head, tokenize
 
 from .common import (
     CPA_ADMIN,
@@ -46,6 +48,7 @@ from .common import (
     _text,
     _without,
     instance_names,
+    send_help,
 )
 from .quota import quota_entry
 
@@ -159,7 +162,7 @@ async def _capture_oauth_callback(bot: Bot, event: Event) -> None:
 
 
 @cpa.assign("$main")
-async def cpa_help() -> None:
+async def cpa_help(event: Event) -> None:
     providers = "（暂时无法获取，CPA 未连通时仍可看本帮助）"
     names = instance_names()
     if names:
@@ -170,54 +173,10 @@ async def cpa_help() -> None:
                 providers = known
         except CPAError:
             pass
-    await UniMessage(_cpa_help_text(providers)).finish()
-
-
-def _cpa_help_text(providers: str) -> str:
-    return "\n".join(
-        [
-            "CLIProxyAPI 管理（仅超级用户 / admins）",
-            "命令前缀 / 可有可无：/cpa 与 cpa 相同。",
-            "除登录回调外，所有子命令都要在第一个位置写 CPA 实例名。",
-            "",
-            "【实例管理】",
-            "  cpa instance list",
-            "  cpa instance add <名称> <base_url> [--key K] [--timeout N] [--quota-timeout N] [--concurrency N] [--cache-ttl N] [--no-image]",
-            "  cpa instance show <名称>",
-            "  cpa instance remove <名称> --yes",
-            "",
-            "【探活】",
-            "  cpa status <实例>",
-            "    版本、凭证 ready / 禁用 / 冷却计数。不回传配置正文。",
-            "",
-            "【凭证】",
-            "  cpa auth list <实例> [渠道] [--disabled]",
-            "    摘要列表。默认隐藏已禁用账号；加 --disabled 才显示。",
-            "    渠道如 claude / codex(gpt, openai) / antigravity(反重力) / kimi / xai。",
-            "  cpa auth show <实例> <查询词>",
-            "  cpa auth on|off <实例> <查询词>",
-            "  cpa auth models <实例> <查询词>",
-            "  cpa auth delete <实例> <查询词> --yes",
-            "",
-            "【Codex 重置】消耗官方重置次数，立刻刷新 5h/周窗口。",
-            "  仅 codex_refresh_admin 可执行。",
-            "  cpa codex refresh <实例> <查询词>",
-            "",
-            "【登录】授权链接优先私聊。",
-            f"  可用渠道：{providers}",
-            "  cpa login <实例> <渠道>",
-            "    完成后把浏览器地址栏完整回调链接发到当前聊天（会自动归属到该实例）。",
-            "  cpa login <实例> callback <回调链接>",
-            "  cpa login <实例> cancel",
-            "",
-            "【额度】默认查询全部 CPA 平台，可用 cpa_additional_channel 追加渠道（如 qoder / workbuddy；写 all = 全部渠道）。",
-            "  cpa quota [平台] [实例] [--instance <实例>] [--fresh] [--text]",
-            "    例：cpa quota xai JP-AI   只查 JP-AI 实例的 xAI 额度",
-            "        cpa quota xai         查全部实例的 xAI 额度",
-            "        cpa quota             查全部 CPA 实例（或配置的默认渠道）",
-            "        cpa quota all         查本地渠道 + 全部 CPA 实例",
-            "        cpa quota help        查看帮助",
-        ]
+    parts = strip_quota_head(tokenize(event.get_plaintext()))
+    await send_help(
+        parse_help(cpa_help_text(providers)),
+        text=any(p.lower() in TEXT_FLAGS for p in parts),
     )
 
 

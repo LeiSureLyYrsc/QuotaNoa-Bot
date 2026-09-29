@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from nonebot_plugin_alconna import Query, UniMessage
 
-from ..render.settings import get_render_settings, set_cards_per_row, set_theme
+from ..render.settings import get_render_settings, set_cards_per_row, set_max_cards_per_channel, set_theme
 from ..render.themes import get_theme_registry
 
 from .common import _text, _without
@@ -53,7 +53,22 @@ async def quota_card_row(count: Query[str] = Query("card.row.count")) -> None:
     await UniMessage(f"已设置每行展示 {settings.cards_per_row} 张卡片。").finish()
 
 
-@quota.assign("card", additional=_without("card.row"))
+@quota.assign("card.max")
+async def quota_card_max(count: Query[str] = Query("card.max.count")) -> None:
+    val = _text(count)
+    try:
+        settings = set_max_cards_per_channel(val)
+    except ValueError as exc:
+        await UniMessage(str(exc)).finish()
+        return
+    await UniMessage(f"已设置每渠道最多展示 {settings.max_cards_per_channel} 张账号卡片。").finish()
+
+
+@quota.assign("card", additional=_without("card.row", "card.max"))
 async def quota_card_get() -> None:
     settings = get_render_settings()
-    await UniMessage(f"当前每行卡片数：{settings.cards_per_row} (1..6)\n修改排版：/quotanoa card row <数量>").finish()
+    await UniMessage(
+        f"当前每行卡片数：{settings.cards_per_row} (1..6)\n"
+        f"每渠道最多账号卡片数：{settings.max_cards_per_channel}\n"
+        f"修改排版：/quotanoa card row <数量>；/quotanoa card max <数量>"
+    ).finish()

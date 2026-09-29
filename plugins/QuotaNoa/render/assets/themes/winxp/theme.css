@@ -10,6 +10,11 @@
   --xp-banner-bg: #ffffe1;
   --xp-banner-border: #e2c822;
   --xp-font: Tahoma, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --hl-cmd: #0044cc;
+  --hl-arg: #7b1fa2;
+  --hl-opt: #00701a;
+  --hl-key: #a04000;
+  --hl-warn: #c62828;
 
   font-family: var(--xp-font);
   color: var(--xp-text);

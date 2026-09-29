@@ -108,7 +108,7 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
       "volcengine": 0
     }
   },
-  "render": { "theme": "default", "cards_per_row": 4 },
+  "render": { "theme": "default", "cards_per_row": 3, "max_cards_per_channel": 40 },
   "onebot-v11-feature": { "forward-message": false },
   "pin-channel": [],                // 渠道置顶顺序（通用，对所有适配器生效；如 ["xai", "火山"]）
   "quotanoa_additional_channel": [],  // /quotanoa 无参时在本地渠道之外追加的渠道（如 antigravity；写 all = 全部渠道）
@@ -126,7 +126,7 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 | `workbuddy.servers[]` | 每个 WorkBuddy2API 网关一项：`base_url`（如 `http://host:7863`）、`username` + `password`（控制台账号，插件自动登录换 `api_key`）、可选 `api_key`（跳过登录直连）、`timeout`。多个网关的账号会汇总到同一张 WorkBuddy 板，按网关名前缀区分 |
 | `qoder.servers[]` | 每个 Qoder2OAPI 代理一项：`name`、`base_url`（如 `http://127.0.0.1:8000`）、`api_key`、`timeout`。多个代理的号池账号会汇总到同一张 Qoder 板，按代理名前缀区分 |
 | `refreshcache` | 各渠道查询结果的缓存秒数：`default` 为兜底，`channels` 按渠道名覆盖（支持别名如 `gpt`/`火山` 归一）。CPA 实例未命中渠道覆盖时回退到实例 `quota_cache_ttl`；`0` 表示该渠道不缓存。`/quotanoa --fresh` 仍强制重查 |
-| `render` | 额度图主题与每行卡片数（1..6），`/quotanoa theme` `/quotanoa card row` 可改 |
+| `render` | 额度图主题、每行卡片数（默认 3 列，范围 1..6）与每渠道账号卡片上限（默认 40），可用 `/quotanoa theme`、`/quotanoa card row`、`/quotanoa card max` 修改 |
 | `onebot-v11-feature.forward-message` | **仅 OneBot V11 适配器**生效：`true` 时把 `/quotanoa` / `/cpa quota` 的多条额度结果（标题文字 + 图片）合并成**一条合并转发**消息发出，节点署名取 Bot 真实昵称（失败回退 Bot 号）。Telegram 等其它适配器与 `false` 时按原样逐条发送；查询过程中的「正在查询…」提示始终单独发送，不参与合并 |
 | `pin-channel` | **渠道置顶**（通用，对所有适配器生效）：数组顺序即发送顺序，**左 → 右 = 上 → 下**。命中的渠道整体前置，未命中当前查询列表的渠道自动忽略，其余渠道保持默认顺序。值支持别名（`火山`→`volcengine`、`wb`→`workbuddy`、`反重力`→`antigravity`）。例：`["xai", "火山"]` 下 `/cpa quota` 全部渠道时 xAI 在最顶部（含 xAI 的 CPA 板整块浮到本地渠道之前），`/quotanoa` 默认只查本地渠道、xai 不在列表里被忽略，火山置顶 |
 
@@ -146,7 +146,7 @@ Bot 与 CPA 不在同一台机器时，CPA 需要 `remote-management.allow-remot
 | --- | --- |
 | `/quotanoa` | **默认**先查本地渠道（火山 / WorkBuddy / Qoder），再追加 `quotanoa_additional_channel` 里的渠道；多实例时 CPA 结果按 `[实例名]` 前缀区分 |
 | `/quotanoa all` | 查询**全部渠道**：本地渠道 + 全部 CPA 平台（同义 `--all` / `-a`，与 `/cpa quota all` 内容一致） |
-| `/quotanoa help` | 查看帮助（同义 `--help` / `-h`） |
+| `/quotanoa help` | 查看帮助图（同义 `--help` / `-h`；加 `--text` 只发文字）。帮助图主题跟随 `render.theme`（`/quotanoa theme`），渲染失败自动回退文字 |
 | `/quotanoa <平台>` | 只看一个平台：`claude` / `codex`(gpt, openai) / `antigravity`(反重力, agy) / `kimi` / `xai` / `workbuddy`(wb) / `qoder` |
 | `/quotanoa 火山` | 查询火山方舟 Coding Plan + Agent Plan 额度（档位、用量、订阅到期；同义：`volc` / `volcengine` / `ark` / `火山方舟`） |
 | `/quotanoa workbuddy` | 查询全部 WorkBuddy 网关的积分额度（同义：`wb`） |
@@ -173,14 +173,14 @@ Bot 与 CPA 不在同一台机器时，CPA 需要 `remote-management.allow-remot
 | `/quotanoa alias set <渠道> <查询词> <别名>` | 为指定渠道账号设置别名 |
 | `/quotanoa alias del <查询词>` | 删除别名（跨渠道全部删除） |
 | `/quotanoa theme [set <主题>]` | 查看 / 设置额度图主题（`default` / `mac` / `md3` / `winxp` / `win7`） |
-| `/quotanoa card [row <1..6>]` | 查看 / 设置每行卡片数量 |
+| `/quotanoa card [row <1..6>] [max <数量>]` | 查看每行卡片数与每渠道上限 / 设置每行卡片数（1..6）/ 设置每渠道卡片上限（如 `max 40`） |
 | `/quotanoa config show` | 查看当前生效配置（密钥脱敏）与最近解析错误 |
 | `/quotanoa config reload` | 强制从磁盘重载配置 |
 | `/quotanoa config fix` | 修补配置文件：按内置默认补齐缺失的设置项（不覆盖已有值），写回前先把旧文件备份到 `data/backup/quotanoa_config_<日期>-<时间>_bak.json`（备份目录常量在 `plugins/QuotaNoa/config.py` 的 `DEFAULT_BACKUP_DIR`）。配置已完整时不做任何写盘 |
 
 ### CPA 管理 `/cpa`
 
-除登录回调外，所有子命令都要在第一个位置写 CPA 实例名。
+除登录回调外，所有子命令都要在第一个位置写 CPA 实例名。裸 `/cpa` 显示帮助图（加 `--text` 只发文字）。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -234,7 +234,7 @@ CLIProxyAPI **没有**账号池额度聚合接口。`GET /auth-files` 只有健�
 
 `3.44/4 (86%)` 表示：该窗口剩余当量 3.44 个满额号，4 个账号均剩 86%。1.00 = 满额一个号。
 
-默认用 Playwright 把同一平台的账号卡合并成一张图发送（视觉对齐管理台 Quota 页，不含 Refresh / 时间轴）。超过 8 个账号会拆成多张。出图函数 `render_platform_images` / `render_board_images` 不依赖聊天会话，以后做定时推送可以直接复用。
+默认用 Playwright 把同一平台的账号卡合并成图片发送（视觉对齐管理台 Quota 页，不含 Refresh / 时间轴；默认 3 列 × 3 行网格排版，首图含概览卡容纳 8 个账号，后续每图 9 个账号，超过时自动拆成多张图片；每渠道账号卡片数量受 `render.max_cards_per_channel` 限制，默认最多展示 40 张卡片，超出部分在概览卡显示 `仅显示` 提示）。发送图片时不附加前置文字标题。出图函数 `render_platform_images` / `render_board_images` 不依赖聊天会话，以后做定时推送可以直接复用。
 
 开启 `onebot-v11-feature.forward-message` 且当前为 OneBot V11 会话时，上述拆出来的多条「标题 + 图」结果会再合并成**一条合并转发**发送；`pin-channel` 决定的渠道顺序在合并转发里同样生效。
 
@@ -248,6 +248,7 @@ CLIProxyAPI **没有**账号池额度聚合接口。`GET /auth-files` 只有健�
 plugins/QuotaNoa/render/assets/
 ├─ quota.html
 ├─ base.css
+├─ help.css
 ├─ brands/
 └─ themes/
    ├─ default/
@@ -274,9 +275,15 @@ themes/<主题名>/
 
 新增主题时只需复制一个现有目录、修改目录名及上述四个文件，然后重启 Bot。主题目录名必须与 `theme.json` 中的 `name` 相同，并使用小写字母、数字、下划线或连字符。无需修改 Python 注册表或命令代码。运行时 CSS 和 wrapper 禁止脚本、事件处理器、`@import` 和远程 HTTP(S) 资源。
 
-默认主题的 canonical 名称为 `default`。旧配置中的 `"theme": "shadcn"` 会自动兼容并解析为 `default`。主题和卡片布局保存在 `data/quotanoa_config.json` 的 `render` 段（`/quotanoa theme`、`/quotanoa card row` 修改），不使用主题相关环境变量。
+默认主题的 canonical 名称为 `default`。旧配置中的 `"theme": "shadcn"` 会自动兼容并解析为 `default`。主题和卡片布局保存在 `data/quotanoa_config.json` 的 `render` 段（默认 `cards_per_row` 为 3、`max_cards_per_channel` 为 40，可用 `/quotanoa theme`、`/quotanoa card row`、`/quotanoa card max` 修改），不使用主题相关环境变量。
 
 未安装 Chromium 时会自动回退文字，并提示执行 `playwright install chromium`（推荐：`uv run playwright install chromium`）。`cpa.quota_image=false` 或 `/quotanoa --text` 可强制只要文字。
+
+### 帮助图与字段高亮
+
+`/quotanoa help`（`--help` / `-h`）与裸 `/cpa` 默认把帮助排版成单张图片发送（无前置文字标题），沿用**同一套主题资源**（`base.css` + 各主题 `theme.css` + `help.css`），因此 `/quotanoa theme set mac` 之后帮助图也是 mac 风格。渲染失败（未装 Chromium 等）自动回退纯文字帮助，加 `--text`（如 `/quotanoa help --text`、`/cpa --text`）可强制只要文字。发送额度卡图片与帮助图时均不再附带前置文本消息。
+
+帮助图与额度卡错误框共用一套**可复用字段高亮**（`plugins/QuotaNoa/render/highlight.py`）：把命令（`cmd`）、占位参数（`arg`）、开关（`opt`）、配置键（`key`）、告警（`warn`）在文本里自动标出。任意文本一行调用 `highlight_html(text)` 即可套用（输出已转义），配色由各主题的 `--hl-*` 变量决定。
 
 支持的上游：Claude OAuth usage、Codex WHAM usage、Antigravity `retrieveUserQuotaSummary` + `loadCodeAssist`（套餐）、Kimi usages、xAI billing credits、**火山方舟 Coding Plan / Agent Plan**（控制面 `GetCodingPlanUsage` 与 `GetAFPUsage`）、**WorkBuddy2API**（`GET /v1/quota`，聚合积分 + 套餐数）、**Qoder2OAPI**（`GET /v1/dashboard/billing/credits`，号池聚合 + 每账号 general/addon/dedicated 分桶；账号 `user_type` 会映射为订阅档位：个人 = 体验版 / 专业版 / 高级版 / 旗舰版，企业 = 团队版 / 企业标准版，兼容 `personal_professional` 与 `PLAN_TIER_*` / `ORGANIZATION_PLAN_TIER_*` 两种写法）。Antigravity 的 `account_type=oauth` 只是登录方式，套餐来自 `paidTier`（Pro / Plus / Ultra）。未知 / API-key 渠道只显示本地健康状态。
 

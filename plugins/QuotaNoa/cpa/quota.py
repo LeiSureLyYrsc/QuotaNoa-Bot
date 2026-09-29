@@ -1249,7 +1249,11 @@ async def _upstream_json(
 
 def _format_platform(section: PlatformQuota, account_limit: int) -> list[str]:
     account_n = len(section.accounts)
-    lines = [f"【{section.title}】{account_n} 账号"]
+    hidden = int(getattr(section, "hidden", 0) or 0)
+    header = f"【{section.title}】{account_n} 账号"
+    if hidden:
+        header += f"（另有 {hidden} 个未显示）"
+    lines = [header]
     total_groups = platform_total_groups(section)
     if total_groups:
         if len(total_groups) == 1 and not total_groups[0][0]:

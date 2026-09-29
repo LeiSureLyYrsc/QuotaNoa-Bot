@@ -10,6 +10,11 @@
   --mac-orange: #ffb86c;
   --mac-red: #ff5555;
   --mac-magenta: #ff79c6;
+  --hl-cmd: #8be9fd;
+  --hl-arg: #ff79c6;
+  --hl-opt: #50fa7b;
+  --hl-key: #f1fa8c;
+  --hl-warn: #ff5555;
 
   background: #18181f;
   color: var(--mac-text);

@@ -46,6 +46,10 @@ DEFAULT_CARDS_PER_ROW = 3
 MIN_CARDS_PER_ROW = 1
 MAX_CARDS_PER_ROW = 6
 
+DEFAULT_MAX_CARDS_PER_CHANNEL = 40
+MIN_MAX_CARDS_PER_CHANNEL = 1
+MAX_MAX_CARDS_PER_CHANNEL = 200
+
 DEFAULT_CPA_BASE_URL = "http://127.0.0.1:8317"
 DEFAULT_REFRESH_CACHE_TTL = 60.0
 
@@ -279,6 +283,7 @@ class RenderConfig:
 
     theme: str = DEFAULT_THEME
     cards_per_row: int = DEFAULT_CARDS_PER_ROW
+    max_cards_per_channel: int = DEFAULT_MAX_CARDS_PER_CHANNEL
 
 
 @dataclass(frozen=True)
@@ -405,6 +410,7 @@ class ConfigSnapshot:
             "render": {
                 "theme": self.render.theme,
                 "cards_per_row": self.render.cards_per_row,
+                "max_cards_per_channel": self.render.max_cards_per_channel,
             },
             "onebot-v11-feature": {
                 "forward-message": self.onebot_v11_feature.forward_message,
@@ -588,7 +594,9 @@ def _parse_render(raw: Any) -> RenderConfig:
     theme = _as_str(data.get("theme"), DEFAULT_THEME) or DEFAULT_THEME
     cards = _as_int(data.get("cards_per_row"), DEFAULT_CARDS_PER_ROW)
     cards = max(MIN_CARDS_PER_ROW, min(MAX_CARDS_PER_ROW, cards))
-    return RenderConfig(theme=theme, cards_per_row=cards)
+    max_cards = _as_int(data.get("max_cards_per_channel"), DEFAULT_MAX_CARDS_PER_CHANNEL)
+    max_cards = max(MIN_MAX_CARDS_PER_CHANNEL, min(MAX_MAX_CARDS_PER_CHANNEL, max_cards))
+    return RenderConfig(theme=theme, cards_per_row=cards, max_cards_per_channel=max_cards)
 
 
 def _parse_refreshcache(raw: Any) -> RefreshCacheConfig:
