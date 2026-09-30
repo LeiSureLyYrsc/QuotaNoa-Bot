@@ -1,7 +1,7 @@
 """/quotanoa client：远程客户端（Server 模式）实例与服务端开关管理。
 
-服务端监听设置与客户端列表均存于 ``data/quotanoa_config.json`` 的 ``server`` 段与
-顶层 ``clients`` 列表（首建即生成，服务器模式默认关）。命令仅超级用户 / admins 可用。
+服务端监听设置与客户端列表均存于独立文件 ``data/quotanoa_client.json`` 的 ``server``
+段与顶层 ``clients`` 列表（首建即生成，服务器模式默认关）。命令仅超级用户 / admins 可用。
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from .quota import quota
 
 
 def _clients() -> tuple[ClientInstance, ...]:
-    return state.get_snapshot().clients
+    return state.get_client_snapshot().clients
 
 
 def _write_clients(clients: tuple[ClientInstance, ...]) -> None:
-    state.update_config({"clients": [client.to_dict() for client in clients]})
+    state.update_client_config({"clients": [client.to_dict() for client in clients]})
 
 
 @quota.assign("client.add")
@@ -60,18 +60,18 @@ async def client_add(
     except ConfigError as exc:
         await UniMessage(f"写入配置失败：{exc}").finish()
         return
-    cfg = state.get_snapshot().server
+    cfg = state.get_client_snapshot().server
     lines = [
         f"已创建远程客户端「{cname}」。",
         f"  连接地址：{cfg.ws_url()}",
         f"  连接密钥：{secret}",
         f"  allow_refresh：{allow}",
-        f"  配置文件：{state.snapshot_path() or '（内存模式）'}",
+        f"  配置文件：{state.client_snapshot_path() or '（内存模式）'}",
     ]
     if not cfg.enabled:
         lines.append(
             "  ⚠ 服务端未启用：发送 /quotanoa client server on 或把 "
-            "data/quotanoa_config.json 的 server.enabled 设为 true。"
+            "data/quotanoa_client.json 的 server.enabled 设为 true。"
         )
     lines.append("把连接地址与密钥填入客户端 config.json（client.server_url / client.key）。")
     await UniMessage("\n".join(lines)).finish()
@@ -80,7 +80,7 @@ async def client_add(
 @quota.assign("client.list")
 async def client_list() -> None:
     clients = _clients()
-    cfg = state.get_snapshot().server
+    cfg = state.get_client_snapshot().server
     hub = get_hub()
     online = set(hub.online_names())
     lines = [
@@ -197,12 +197,12 @@ async def client_remove(
 
 
 async def _set_server_enabled(enabled: bool) -> None:
-    cfg = state.get_snapshot().server
+    cfg = state.get_client_snapshot().server
     if cfg.enabled == enabled:
         await UniMessage(f"服务端已处于{'开启' if enabled else '关闭'}状态。").finish()
         return
     try:
-        state.update_config({"server": {"enabled": enabled}})
+        state.update_client_config({"server": {"enabled": enabled}})
     except ConfigError as exc:
         await UniMessage(f"写入配置失败：{exc}").finish()
         return
@@ -225,7 +225,7 @@ async def client_server_off() -> None:
 
 @quota.assign("client.server.show")
 async def client_server_show() -> None:
-    cfg = state.get_snapshot().server
+    cfg = state.get_client_snapshot().server
     hub = get_hub()
     lines = [
         "【远程客户端服务端】",

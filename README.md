@@ -57,10 +57,11 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 
 ### QuotaNoa 插件
 
-业务配置（CPA 实例、火山凭据、渲染主题、别名文件路径）全部放在 `data/quotanoa_config.json`，首次启动自动生成，支持热重载。`.env` 里只有这一项可选覆盖：
+业务配置（CPA 实例、火山凭据、渲染主题、别名文件路径）全部放在 `data/quotanoa_config.json`，首次启动自动生成，支持热重载。远程客户端（Server 模式）另有独立文件 `data/quotanoa_client.json`。`.env` 里这两项可选覆盖：
 
 ```env
 # QUOTANOA_CONFIG_FILE=data/quotanoa_config.json
+# QUOTANOA_CLIENT_CONFIG_FILE=data/quotanoa_client.json
 ```
 
 `quotanoa_config.json` 结构：
@@ -142,11 +143,10 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 
 ### 服务端（Bot）
 
-服务端监听设置与客户端列表都存在 `data/quotanoa_config.json`（首次启动自动生成，**服务器模式默认关**）：
+服务端监听设置与客户端列表存在独立文件 `data/quotanoa_client.json`（首次启动自动生成，**服务器模式默认关**）：
 
 ```jsonc
 {
-  // ...其余业务配置...
   "server": {
     "enabled": false,          // 独立开关；可用 /quotanoa client server on 热开启
     "server_name": "Server",   // 本机保留名
@@ -162,6 +162,7 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 }
 ```
 
+- 主配置 `data/quotanoa_config.json` 不再包含 `server` / `clients`；若旧文件里仍有这些键，会被**忽略**（不会自动迁移），请手工搬到 `data/quotanoa_client.json`。
 - `server.enabled` 支持热切换（`/quotanoa client server on|off`）；`host`/`port` 等监听参数变更需重启 Bot。
 - `clients` 默认空；`/quotanoa client add` 自动追加。
 
@@ -230,7 +231,7 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 | `/quotanoa card [row <1..6>] [max <数量>]` | 查看每行卡片数与每渠道上限 / 设置每行卡片数（1..6）/ 设置每渠道卡片上限（如 `max 40`） |
 | `/quotanoa config show` | 查看当前生效配置（密钥脱敏）与最近解析错误 |
 | `/quotanoa config reload` | 强制从磁盘重载配置 |
-| `/quotanoa config fix` | 修补配置文件：按内置默认补齐缺失的设置项（不覆盖已有值），写回前先把旧文件备份到 `data/backup/quotanoa_config_<日期>-<时间>_bak.json`（备份目录常量在 `plugins/QuotaNoa/config.py` 的 `DEFAULT_BACKUP_DIR`）。配置已完整时不做任何写盘 |
+| `/quotanoa config fix` | 修补主配置与客户端配置：按内置默认补齐缺失的设置项（不覆盖已有值），写回前先把旧文件备份到 `data/backup/quotanoa_config_<日期>-<时间>_bak.json`（客户端文件为 `quotanoa_client_<日期>-<时间>_bak.json`；备份目录常量在 `plugins/QuotaNoa/config.py` 的 `DEFAULT_BACKUP_DIR`）。配置已完整时不做任何写盘 |
 
 ### CPA 管理 `/cpa`
 

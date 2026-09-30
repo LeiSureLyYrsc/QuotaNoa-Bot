@@ -122,7 +122,7 @@ def quota_help_text() -> str:
             "  /quotanoa qoder remove <名称> --yes",
             "",
             "【远程客户端】Server 模式：Go 客户端主动连接，额度来自远端 CPA/本地渠道。",
-            "  配置在 data/quotanoa_config.json 的 server 段与顶层 clients（首建即生成，服务器模式默认关）。",
+            "  配置在 data/quotanoa_client.json 的 server 段与顶层 clients（首建即生成，服务器模式默认关）。",
             "  /quotanoa client server on|off|show   服务端开关（enabled 热切换）与监听设置",
             "  /quotanoa client list",
             "  /quotanoa client add <名称> [--key K] [--allow-refresh] [--note N]",

@@ -1,8 +1,10 @@
 """配置快照与热重载。
 
-- ``data/quotanoa_config.json`` 是唯一配置源（除 ``.env`` 里的 ``QUOTANOA_CONFIG_FILE``）。
-- ``ensure_fresh()`` 在每个命令入口做廉价的 mtime/size 检查，变化才重新解析。
-- 解析失败**保留上一份好快照**（fail-soft），错误可通过 ``last_error()`` 查询。
+- ``data/quotanoa_config.json`` 是主配置源（业务渠道、渲染、别名等）。
+- ``data/quotanoa_client.json`` 是远程客户端（Server 模式）配置源（server 段 + clients）。
+- ``.env`` 里可选覆盖两者的路径（``QUOTANOA_CONFIG_FILE`` / ``QUOTANOA_CLIENT_CONFIG_FILE``）。
+- ``ensure_fresh()`` 在每个命令入口做廉价的 mtime/size 检查（两份文件任一变化即重载）。
+- 解析失败**保留上一份好快照**（fail-soft），错误可通过 ``last_error()`` / ``client_last_error()`` 查询。
 - 重载后按固定顺序失效下游缓存：别名 → 主题注册表 → 额度缓存。
 
 本模块属根模块，只允许依赖 ``config``；对子包（cpa/render）的调用
@@ -18,11 +20,14 @@ from typing import Any, Callable, Mapping
 
 from . import config as config_module
 from .config import (
+    DEFAULT_CLIENT_CONFIG_FILE,
     DEFAULT_CONFIG_FILE,
+    ClientConfigSnapshot,
     ClientRegistry,
     ConfigError,
     ConfigSnapshot,
     Config,
+    client_snapshot_from_raw,
     read_config_file,
     snapshot_from_raw,
 )
@@ -44,8 +49,16 @@ _last_error: str = ""
 _loaded_path: Path | None = None
 _memory_only = False
 
+_client_snapshot: ClientConfigSnapshot | None = None
+_client_signature: tuple[int, int] | None = None
+_client_last_error: str = ""
+_client_loaded_path: Path | None = None
+
+_legacy_split_warned = False
+
 _env_config: Config | None = None
 _path_override: Path | None = None
+_client_path_override: Path | None = None
 
 
 def register_reload_hook(hook: Callable[[ConfigSnapshot], None]) -> None:
@@ -73,18 +86,39 @@ def config_file_path() -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def client_config_file_path() -> Path:
+    """解析客户端配置文件（``data/quotanoa_client.json``）的绝对路径。"""
+    global _env_config
+    if _client_path_override is not None:
+        return _client_path_override
+    raw = DEFAULT_CLIENT_CONFIG_FILE
+    try:
+        if _env_config is None:
+            from nonebot import get_plugin_config
+
+            _env_config = get_plugin_config(Config)
+        env_config = _env_config
+        if env_config is not None:
+            raw = env_config.quotanoa_client_config_file or DEFAULT_CLIENT_CONFIG_FILE
+    except Exception:
+        raw = DEFAULT_CLIENT_CONFIG_FILE
+    return Path(raw).expanduser().resolve()
+
+
 # --------------------------------------------------------------------------- #
 # 远程客户端服务端（Server 模式）
 # --------------------------------------------------------------------------- #
 
 
-def client_registry(snapshot: ConfigSnapshot | None = None) -> ClientRegistry:
-    """从配置快照派生客户端内存视图（持久化在主配置的 ``clients``）。"""
-    data = snapshot if snapshot is not None else get_snapshot()
+def client_registry(snapshot: ClientConfigSnapshot | None = None) -> ClientRegistry:
+    """从客户端配置快照派生客户端内存视图。"""
+    data = snapshot if snapshot is not None else get_client_snapshot()
     return ClientRegistry(clients=data.clients)
 
 
-def _sync_client_hub(snapshot: ConfigSnapshot, previous: ConfigSnapshot | None = None) -> None:
+def _sync_client_hub(
+    snapshot: ClientConfigSnapshot, previous: ClientConfigSnapshot | None = None
+) -> None:
     """把服务端设置与客户端列表同步给 Hub。
 
     - 客户端列表 / 监听参数：直接 ``configure``（列表热生效）。
@@ -160,6 +194,14 @@ def get_snapshot() -> ConfigSnapshot:
         return _snapshot  # type: ignore[return-value]
 
 
+def get_client_snapshot() -> ClientConfigSnapshot:
+    """返回当前客户端配置快照；首次调用时惰性加载（缺失则生成默认文件）。"""
+    with _lock:
+        if _client_snapshot is None:
+            _load(force=True, generate=True)
+        return _client_snapshot  # type: ignore[return-value]
+
+
 def generation() -> int:
     return _generation
 
@@ -168,25 +210,23 @@ def last_error() -> str:
     return _last_error
 
 
+def client_last_error() -> str:
+    return _client_last_error
+
+
 def snapshot_path() -> Path | None:
     return _loaded_path
 
 
-def _load(*, force: bool, generate: bool) -> bool:
-    """内部加载。返回是否发生了替换。调用方需持有 _lock。"""
-    global _snapshot, _generation, _signature, _last_error, _loaded_path
+def client_snapshot_path() -> Path | None:
+    return _client_loaded_path
 
-    if _memory_only:
-        if _snapshot is None:
-            _snapshot = config_module.snapshot_from_raw(config_module.default_config_dict())
-            _generation += 1
-        return False
 
-    path = config_file_path()
-    signature = _read_signature(path)
-    if not force and signature is not None and signature == _signature and _snapshot is not None:
-        return False
-
+def _load_main(
+    path: Path, signature: tuple[int, int] | None, *, generate: bool
+) -> tuple[ConfigSnapshot | None, str]:
+    """读取并解析主配置；失败返回 ``(None, 错误消息)``（fail-soft）。"""
+    global _legacy_split_warned
     try:
         if signature is None:
             if not generate:
@@ -197,29 +237,113 @@ def _load(*, force: bool, generate: bool) -> bool:
                 _warn_legacy(path)
         else:
             raw = read_config_file(path)
-        snapshot = snapshot_from_raw(raw)
+        if ("server" in raw or "clients" in raw) and not _legacy_split_warned:
+            _legacy_split_warned = True
+            logger.warning(
+                "主配置 {} 仍含 server / clients 键：远程客户端配置已迁移到 {}，"
+                "这些旧键现已被忽略，请手工搬运后删除。",
+                path,
+                DEFAULT_CLIENT_CONFIG_FILE,
+            )
+        return snapshot_from_raw(raw), ""
     except ConfigError as exc:
-        _last_error = str(exc)
-        if _snapshot is None:
-            # 没有任何可用配置时，至少保证有默认值可用。
-            _snapshot = config_module.snapshot_from_raw(config_module.default_config_dict())
-            _generation += 1
-        return False
+        return None, str(exc)
     except Exception as exc:  # noqa: BLE001 - 任何解析异常都不能让消息处理崩溃
-        _last_error = f"配置解析失败：{exc}"
+        return None, f"配置解析失败：{exc}"
+
+
+def _load_client(
+    path: Path, signature: tuple[int, int] | None, *, generate: bool
+) -> tuple[ClientConfigSnapshot | None, str]:
+    """读取并解析客户端配置；失败返回 ``(None, 错误消息)``（fail-soft）。"""
+    try:
+        if signature is None:
+            if not generate:
+                raise ConfigError(f"客户端配置文件不存在：{path}")
+            raw = config_module.ensure_client_config_file(path)
+        else:
+            raw = read_config_file(path)
+        return client_snapshot_from_raw(raw), ""
+    except ConfigError as exc:
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"客户端配置解析失败：{exc}"
+
+
+def _load(*, force: bool, generate: bool) -> bool:
+    """内部加载（主配置 + 客户端配置）。返回是否发生了替换。调用方需持有 _lock。"""
+    global _snapshot, _generation, _signature, _last_error, _loaded_path
+    global _client_snapshot, _client_signature, _client_last_error, _client_loaded_path
+
+    if _memory_only:
         if _snapshot is None:
             _snapshot = config_module.snapshot_from_raw(config_module.default_config_dict())
             _generation += 1
+        if _client_snapshot is None:
+            _client_snapshot = config_module.client_snapshot_from_raw(
+                config_module.default_client_config_dict()
+            )
+        return False
+
+    path = config_file_path()
+    client_path = client_config_file_path()
+    signature = _read_signature(path)
+    client_signature = _read_signature(client_path)
+
+    if (
+        not force
+        and _snapshot is not None
+        and _client_snapshot is not None
+        and signature == _signature
+        and client_signature == _client_signature
+    ):
         return False
 
     previous = _snapshot
-    _snapshot = snapshot
-    _generation += 1
+    previous_client = _client_snapshot
+
+    new_snapshot, main_error = _load_main(path, signature, generate=generate)
+    new_client, client_error = _load_client(client_path, client_signature, generate=generate)
+
+    replaced = False
+    if new_snapshot is not None:
+        _snapshot = new_snapshot
+        _last_error = main_error
+        replaced = True
+    elif _snapshot is None:
+        # 没有任何可用配置时，至少保证有默认值可用。
+        _snapshot = config_module.snapshot_from_raw(config_module.default_config_dict())
+        _last_error = main_error
+        replaced = True
+    else:
+        _last_error = main_error or _last_error
+
+    if new_client is not None:
+        _client_snapshot = new_client
+        _client_last_error = client_error
+        replaced = True
+    elif _client_snapshot is None:
+        _client_snapshot = config_module.client_snapshot_from_raw(
+            config_module.default_client_config_dict()
+        )
+        _client_last_error = client_error
+        replaced = True
+    else:
+        _client_last_error = client_error or _client_last_error
+
+    if replaced:
+        _generation += 1
     _signature = _read_signature(path)
-    _last_error = ""
+    _client_signature = _read_signature(client_path)
     _loaded_path = path
-    _invalidate(snapshot, previous)
-    return True
+    _client_loaded_path = client_path
+    _invalidate(
+        _snapshot,
+        previous,
+        client_snapshot=_client_snapshot,
+        previous_client=previous_client,
+    )
+    return replaced
 
 
 def _cpa_connection_slice(snapshot: ConfigSnapshot) -> tuple[tuple[str, str, str, float], ...]:
@@ -230,7 +354,13 @@ def _cpa_connection_slice(snapshot: ConfigSnapshot) -> tuple[tuple[str, str, str
     )
 
 
-def _invalidate(snapshot: ConfigSnapshot, previous: ConfigSnapshot | None = None) -> None:
+def _invalidate(
+    snapshot: ConfigSnapshot,
+    previous: ConfigSnapshot | None = None,
+    *,
+    client_snapshot: ClientConfigSnapshot | None = None,
+    previous_client: ClientConfigSnapshot | None = None,
+) -> None:
     """按固定顺序失效下游缓存。任何异常只记录，不阻断消息处理。"""
     try:
         from . import aliases
@@ -274,7 +404,8 @@ def _invalidate(snapshot: ConfigSnapshot, previous: ConfigSnapshot | None = None
         except Exception as exc:
             logger.warning(f"配置重载后重建 HTTP 客户端失败：{exc}")
     # 远程客户端服务端：同步设置/列表，并在 enabled 变化时热启停。
-    _sync_client_hub(snapshot, previous)
+    if client_snapshot is not None:
+        _sync_client_hub(client_snapshot, previous_client)
     for hook in list(_hooks):
         try:
             hook(snapshot)
@@ -325,6 +456,45 @@ def update_config(patch: Mapping[str, Any]) -> ConfigSnapshot:
         return _snapshot  # type: ignore[return-value]
 
 
+def update_client_config(patch: Mapping[str, Any]) -> ClientConfigSnapshot:
+    """把 patch 深合并进**客户端配置文件**并重载（server 段 / clients 列表专用）。
+
+    磁盘模式下以磁盘上的当前内容为合并底，避免覆盖操作者刚手改的字段；
+    内存模式只合并内存快照，绝不读写磁盘。
+    """
+    global _client_snapshot, _generation
+    with _lock:
+        if _memory_only:
+            previous_client = _client_snapshot
+            merged = config_module.deep_merge(dict(get_client_snapshot().raw), patch)
+            _client_snapshot = config_module.client_snapshot_from_raw(merged)
+            _generation += 1
+            _invalidate(
+                get_snapshot(),
+                client_snapshot=_client_snapshot,
+                previous_client=previous_client,
+            )
+            return _client_snapshot
+        path = client_config_file_path()
+        if path.is_file():
+            base_raw = config_module.read_config_file(path)
+        else:
+            base_raw = dict(get_client_snapshot().raw)
+        merged = config_module.deep_merge(base_raw, patch)
+        current_sig = _read_signature(path)
+        if (
+            _client_signature is not None
+            and current_sig is not None
+            and current_sig != _client_signature
+        ):
+            raise ConfigError(
+                "客户端配置已被外部修改，本次写入已放弃；下一条消息会自动重载最新配置，请重试。"
+            )
+        config_module.atomic_write_json(path, merged)
+        _load(force=True, generate=False)
+        return _client_snapshot  # type: ignore[return-value]
+
+
 def repair_config() -> config_module.RepairResult:
     """补齐磁盘配置缺失项（先备份旧文件）。内存模式不支持，抛 ``ConfigError``。
 
@@ -335,6 +505,23 @@ def repair_config() -> config_module.RepairResult:
             raise ConfigError("当前为内存配置模式，无法修补磁盘配置文件。")
         path = config_file_path()
         result = config_module.repair_config_file(path)
+        if result.changed:
+            _load(force=True, generate=False)
+        return result
+
+
+def repair_client_config() -> config_module.RepairResult:
+    """补齐磁盘上的客户端配置文件缺失项（先备份旧文件）。内存模式抛 ``ConfigError``。
+
+    客户端配置文件尚未生成时视为无需修补（下次加载会自动生成）。
+    """
+    with _lock:
+        if _memory_only:
+            raise ConfigError("当前为内存配置模式，无法修补磁盘配置文件。")
+        path = client_config_file_path()
+        if not path.is_file():
+            return config_module.RepairResult(changed=False, path=path)
+        result = config_module.repair_client_config_file(path)
         if result.changed:
             _load(force=True, generate=False)
         return result

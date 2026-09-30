@@ -1,7 +1,11 @@
 """QuotaNoa 的 JSON 配置：定义、校验与原子写入。
 
-NoneBot 的 `.env` 只保留 ``QUOTANOA_CONFIG_FILE``（指向本文件）；插件其余配置
-（CPA 实例、火山账号、渲染设置、别名文件路径）都从该 JSON 读取。
+NoneBot 的 `.env` 只保留 ``QUOTANOA_CONFIG_FILE`` 与 ``QUOTANOA_CLIENT_CONFIG_FILE``
+（分别指向主配置与客户端配置）；插件其余配置（CPA 实例、火山账号、渲染设置、
+别名文件路径）都从主 JSON 读取。
+
+远程客户端（Server 模式）的服务端监听设置与客户端列表**独立**存放于
+``data/quotanoa_client.json``（``server`` 段 + 顶层 ``clients``），不再写入主配置。
 
 CPA 支持多个实例：``cpa.instances[]`` 中每一项都是一个独立连接，自带连接与
 额度查询设置。``cpa.admins`` / ``cpa.codex_refresh_admin`` 是全局权限名单，
@@ -36,6 +40,8 @@ from .model import (
 from .protocol import normalize_client_name, valid_client_name
 
 DEFAULT_CONFIG_FILE = "data/quotanoa_config.json"
+#: 远程客户端（Server 模式）配置：服务端监听段 + 客户端列表独立存放，不再写入主配置。
+DEFAULT_CLIENT_CONFIG_FILE = "data/quotanoa_client.json"
 DEFAULT_ALIASES_FILE = "data/quotanoa_aliases.json"
 
 #: ``/quotanoa config fix`` 修补前备份旧配置的目录（相对当前工作目录）。
@@ -58,7 +64,7 @@ DEFAULT_REFRESH_CACHE_TTL = 600.0
 #: 实例名 / 渠道账号名的通用长度上限。
 MAX_NAME_LEN = 32
 
-#: 远程客户端（Server 模式）默认监听设置（写入主配置的 ``server`` 段）。
+#: 远程客户端（Server 模式）默认监听设置（写入客户端配置的 ``server`` 段）。
 DEFAULT_CLIENT_SERVER_NAME = "Server"
 DEFAULT_CLIENT_HOST = "127.0.0.1"
 DEFAULT_CLIENT_PORT = 8320
@@ -104,15 +110,22 @@ def valid_name(value: str) -> bool:
 class Config(BaseModel):
     """NoneBot 环境配置。
 
-    `.env` 里只保留这一项；其余配置都在 ``data/quotanoa_config.json``。
+    `.env` 里只保留这两项（主配置路径与客户端配置路径）；其余配置都在
+    ``data/quotanoa_config.json`` 与 ``data/quotanoa_client.json``。
     """
 
     quotanoa_config_file: str = DEFAULT_CONFIG_FILE
+    quotanoa_client_config_file: str = DEFAULT_CLIENT_CONFIG_FILE
 
     @field_validator("quotanoa_config_file")
     @classmethod
     def _normalize_path(cls, value: str) -> str:
         return str(value or "").strip() or DEFAULT_CONFIG_FILE
+
+    @field_validator("quotanoa_client_config_file")
+    @classmethod
+    def _normalize_client_path(cls, value: str) -> str:
+        return str(value or "").strip() or DEFAULT_CLIENT_CONFIG_FILE
 
 
 # --------------------------------------------------------------------------- #
@@ -329,7 +342,7 @@ class OnebotV11FeatureConfig:
 class ClientServerConfig:
     """独立客户端服务端（Server 模式）监听设置。
 
-    来自 ``data/quotanoa_config.json`` 的 ``server`` 段；``enabled`` 支持热切换，
+    来自 ``data/quotanoa_client.json`` 的 ``server`` 段；``enabled`` 支持热切换，
     监听参数（host/port 等）变更需重启生效。
     """
 
@@ -365,7 +378,7 @@ class ClientInstance:
 
 @dataclass(frozen=True)
 class ClientRegistry:
-    """远程客户端的**内存视图**（持久化在 ``data/quotanoa_config.json`` 的 ``clients``）。"""
+    """远程客户端的**内存视图**（持久化在 ``data/quotanoa_client.json`` 的 ``clients``）。"""
 
     clients: tuple[ClientInstance, ...] = ()
 
@@ -382,6 +395,33 @@ class ClientRegistry:
 
     def to_dict(self) -> dict[str, Any]:
         return {"clients": [client.to_dict() for client in self.clients]}
+
+
+@dataclass(frozen=True)
+class ClientConfigSnapshot:
+    """远程客户端（Server 模式）配置快照。
+
+    持久化在独立文件 ``data/quotanoa_client.json``：``server`` 段为服务端监听设置，
+    ``clients`` 为已注册客户端列表。整体替换，不在原地修改。
+    """
+
+    server: ClientServerConfig = field(default_factory=ClientServerConfig)
+    clients: tuple[ClientInstance, ...] = ()
+    raw: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "server": {
+                "enabled": self.server.enabled,
+                "server_name": self.server.server_name,
+                "host": self.server.host,
+                "port": self.server.port,
+                "request_timeout": self.server.request_timeout,
+                "ws_max_size": self.server.ws_max_size,
+                "max_accounts": self.server.max_accounts,
+            },
+            "clients": [client.to_dict() for client in self.clients],
+        }
 
 
 @dataclass(frozen=True)
@@ -405,10 +445,7 @@ class ConfigSnapshot:
     #: 别名文件路径；默认由本模块的 ``DEFAULT_ALIASES_FILE`` 决定，
     #: JSON 里的 ``aliases_file`` 仅作可选覆盖（旧配置兼容），不再写入生成文件。
     aliases_file: str = DEFAULT_ALIASES_FILE
-    #: 远程客户端服务端（Server 模式）监听设置；持久化在主配置的 ``server`` 段。
-    server: ClientServerConfig = field(default_factory=ClientServerConfig)
-    #: 远程客户端列表；持久化在主配置的 ``clients`` 段。
-    clients: tuple[ClientInstance, ...] = ()
+    #: 原始 JSON 字典（用于读-改-写时保留未知字段）。
     raw: Mapping[str, Any] = field(default_factory=dict)
 
     def cache_ttl(self, channel: str = "", *, fallback: float | None = None) -> float:
@@ -497,22 +534,17 @@ class ConfigSnapshot:
             "pin-channel": list(self.pin_channel),
             "quotanoa_additional_channel": list(self.quotanoa_additional_channel),
             "cpa_additional_channel": list(self.cpa_additional_channel),
-            "server": {
-                "enabled": self.server.enabled,
-                "server_name": self.server.server_name,
-                "host": self.server.host,
-                "port": self.server.port,
-                "request_timeout": self.server.request_timeout,
-                "ws_max_size": self.server.ws_max_size,
-                "max_accounts": self.server.max_accounts,
-            },
-            "clients": [client.to_dict() for client in self.clients],
         }
 
 
 def default_config_dict() -> dict[str, Any]:
     """返回默认配置的原始字典（用于首次生成文件）。"""
     return ConfigSnapshot().to_dict()
+
+
+def default_client_config_dict() -> dict[str, Any]:
+    """返回默认客户端配置的原始字典（用于首次生成 ``quotanoa_client.json``）。"""
+    return ClientConfigSnapshot().to_dict()
 
 
 def _parse_cpa_instance(entry: Any) -> CpaInstance | None:
@@ -736,7 +768,11 @@ def _parse_pin_channel(value: Any) -> tuple[str, ...]:
 
 
 def snapshot_from_raw(raw: Mapping[str, Any]) -> ConfigSnapshot:
-    """把原始 JSON 字典转换为强类型快照。"""
+    """把原始 JSON 字典转换为强类型快照。
+
+    注意：远程客户端（Server 模式）的 ``server`` / ``clients`` 已迁到独立文件，
+    这里即使存在也只是**忽略**（不再解析），请用 ``client_snapshot_from_raw``。
+    """
     if not isinstance(raw, Mapping):
         raise ConfigError("配置根节点必须是 JSON 对象。")
     aliases_file = _as_str(raw.get("aliases_file"), DEFAULT_ALIASES_FILE) or DEFAULT_ALIASES_FILE
@@ -754,6 +790,18 @@ def snapshot_from_raw(raw: Mapping[str, Any]) -> ConfigSnapshot:
         ),
         cpa_additional_channel=_parse_additional_channels(raw.get("cpa_additional_channel")),
         aliases_file=aliases_file,
+        raw=dict(raw),
+    )
+
+
+def client_snapshot_from_raw(raw: Mapping[str, Any]) -> ClientConfigSnapshot:
+    """把客户端配置文件的原始 JSON 字典转换为强类型快照。
+
+    ``server`` 段与顶层 ``clients`` 列表分别解析；名称非法 / 重复会抛 ``ConfigError``。
+    """
+    if not isinstance(raw, Mapping):
+        raise ConfigError("客户端配置根节点必须是 JSON 对象。")
+    return ClientConfigSnapshot(
         server=_parse_server(raw.get("server")),
         clients=_parse_clients(raw.get("clients")),
         raw=dict(raw),
@@ -803,6 +851,15 @@ def ensure_config_file(path: Path) -> dict[str, Any]:
     if path.is_file():
         return read_config_file(path)
     data = default_config_dict()
+    atomic_write_json(path, data)
+    return data
+
+
+def ensure_client_config_file(path: Path) -> dict[str, Any]:
+    """确保客户端配置文件存在并返回其内容；缺失时生成默认文件。"""
+    if path.is_file():
+        return read_config_file(path)
+    data = default_client_config_dict()
     atomic_write_json(path, data)
     return data
 
@@ -991,6 +1048,44 @@ def repair_config_file(path: Path, *, backup_dir: Path | None = None) -> RepairR
         return RepairResult(changed=False, path=path)
     # 补全后先校验；原有语义错误会在此抛出，避免写入半成品。
     snapshot_from_raw(merged)
+    target_dir = backup_dir if backup_dir is not None else default_backup_dir()
+    backup = backup_config_file(path, backup_dir=target_dir)
+    atomic_write_json(path, merged)
+    return RepairResult(
+        changed=True,
+        added_keys=flatten_missing_keys(missing),
+        backup_path=backup,
+        path=path,
+    )
+
+
+def client_config_missing_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """返回客户端配置相对默认配置缺失的键（嵌套结构；空 dict 表示已完整）。"""
+    return _missing_defaults(_as_mapping(raw), default_client_config_dict())
+
+
+def repair_client_config_data(raw: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """补齐客户端配置缺失的默认键，返回 ``(修补后数据, 缺失结构)``。
+
+    缺失结构为空时原样返回 ``raw`` 的浅拷贝。不修改入参。
+    """
+    missing = client_config_missing_defaults(raw)
+    if not missing:
+        return dict(raw), {}
+    return _merge_missing(raw, missing), missing
+
+
+def repair_client_config_file(path: Path, *, backup_dir: Path | None = None) -> RepairResult:
+    """补齐客户端配置文件缺失项：先备份旧文件，再原子写入补全后的内容。
+
+    配置已完整时不做任何写盘，返回 ``changed=False``。修补后若仍无法解析
+    （如客户端重名）则抛 ``ConfigError``，**不写入**。
+    """
+    raw = read_config_file(path)
+    merged, missing = repair_client_config_data(raw)
+    if not missing:
+        return RepairResult(changed=False, path=path)
+    client_snapshot_from_raw(merged)
     target_dir = backup_dir if backup_dir is not None else default_backup_dir()
     backup = backup_config_file(path, backup_dir=target_dir)
     atomic_write_json(path, merged)

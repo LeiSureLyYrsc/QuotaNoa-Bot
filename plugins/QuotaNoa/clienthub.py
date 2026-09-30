@@ -1,8 +1,8 @@
 """远程客户端 Hub：独立 FastAPI 服务端（不与 NoneBot 共享同一 FastAPI 实例）。
 
-- 监听参数来自 ``data/quotanoa_config.json`` 的 ``server`` 段；``enabled`` 支持热切换，
+- 监听参数来自 ``data/quotanoa_client.json`` 的 ``server`` 段；``enabled`` 支持热切换，
   host/port 等监听参数变更需重启生效。
-- 客户端列表来自主配置的 ``clients`` 段（默认空）。
+- 客户端列表来自客户端配置的 ``clients`` 段（默认空）。
 - 协议 v2。刷新能力以**客户端本地配置**为准：服务端只做「额外关闭」
   （客户端 ``allow_refresh`` 且会话上报 ``capabilities.refresh``），
   客户端即使收到刷新请求也会在本地再次拒绝。

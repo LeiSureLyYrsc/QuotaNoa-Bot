@@ -432,7 +432,7 @@ async def codex_refresh(
     if not _can_refresh_codex(event):
         await UniMessage("未配置 codex_refresh_admin，或你不在名单中，无法刷新。").finish()
         return
-    server = state.get_snapshot().server
+    server = state.get_client_snapshot().server
     server_name = normalize_client_name(server.server_name)
     client_param = _text(client) if client.available else ""
     target = normalize_client_name(client_param) if client_param else ""

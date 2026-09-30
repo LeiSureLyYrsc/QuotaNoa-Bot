@@ -37,8 +37,9 @@ async def _startup() -> None:
     # 预生成别名文件模板，方便用户直接编辑（支持热重载）。
     ensure_aliases_file()
     # 远程客户端服务端（Server 模式）：独立开关 server.enabled（默认关）。
-    if snapshot.server.enabled:
-        await get_hub().start(snapshot.server, state.client_registry(snapshot))
+    client_snapshot = state.get_client_snapshot()
+    if client_snapshot.server.enabled:
+        await get_hub().start(client_snapshot.server, state.client_registry(client_snapshot))
 
 
 @driver.on_shutdown

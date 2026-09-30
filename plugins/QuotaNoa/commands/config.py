@@ -91,11 +91,13 @@ async def quota_config_show() -> None:
             lines.append(f"  {name}：{channels[name]:g}s")
     else:
         lines.append("  （无渠道级覆盖，全部用 default）")
-    server = snapshot.server
+    client_snapshot = state.get_client_snapshot()
+    server = client_snapshot.server
     lines.extend(
         [
             "",
             "server（远程客户端服务端）：",
+            f"  客户端配置文件：{state.client_snapshot_path() or '（内存模式）'}",
             f"  enabled：{server.enabled}",
             f"  server_name：{server.server_name}",
             f"  listen：{server.host}:{server.port}",
@@ -103,9 +105,9 @@ async def quota_config_show() -> None:
             f"ws_max_size：{server.ws_max_size}  max_accounts：{server.max_accounts}",
         ]
     )
-    if snapshot.clients:
+    if client_snapshot.clients:
         lines.append("clients：")
-        for client in snapshot.clients:
+        for client in client_snapshot.clients:
             key = mask_secret(client.key) if client.key else "（未设置）"
             lines.append(
                 f"  - {client.name}  key={key}  allow_refresh={client.allow_refresh}"
@@ -115,7 +117,10 @@ async def quota_config_show() -> None:
     error = state.last_error()
     if error:
         lines.append("")
-        lines.append(f"⚠ 上次解析错误：{error}")
+        lines.append(f"⚠ 上次解析错误（主配置）：{error}")
+    client_error = state.client_last_error()
+    if client_error:
+        lines.append(f"⚠ 上次解析错误（客户端配置）：{client_error}")
     await UniMessage("\n".join(lines)).finish()
 
 
@@ -131,30 +136,34 @@ async def quota_config_reload() -> None:
 
 @quota.assign("config.fix")
 async def quota_config_fix() -> None:
-    """补齐配置文件缺失项：先备份旧文件，再写回补全后的内容。"""
+    """补齐主配置与客户端配置的缺失项：先备份旧文件，再写回补全后的内容。"""
     try:
-        result = state.repair_config()
+        main = state.repair_config()
+        client = state.repair_client_config()
     except ConfigError as exc:
         await UniMessage(f"配置文件修补失败：{exc}").finish()
         return
     except Exception as exc:  # noqa: BLE001
         await UniMessage(f"配置文件修补失败：{exc}").finish()
         return
-    if not result.changed:
-        location = result.path or state.snapshot_path() or "（内存模式）"
-        lines = [f"配置已完整，无需修补。\n配置文件：{location}"]
-        error = state.last_error()
-        if error:
-            lines.append(f"⚠ 注意：当前配置仍存在解析错误，fix 只能补缺失项，请手工修正：{error}")
-        await UniMessage("\n".join(lines)).finish()
-        return
-    backup_name = result.backup_path.name if result.backup_path is not None else "（未备份）"
-    lines = [
-        "配置已修补，补齐了以下缺失项：",
-        *(f"  + {key}" for key in result.added_keys),
-        "",
-        f"备份：{backup_name}",
-        f"配置文件：{result.path}",
-        f"generation：{state.generation()}",
-    ]
+    lines: list[str] = []
+    for label, result, fallback, err_text in (
+        ("主配置", main, state.snapshot_path(), state.last_error()),
+        ("客户端配置", client, state.client_snapshot_path(), state.client_last_error()),
+    ):
+        location = result.path or fallback or "（内存模式）"
+        if not result.changed:
+            lines.append(f"{label}：配置已完整，无需修补。\n配置文件：{location}")
+        else:
+            backup_name = (
+                result.backup_path.name if result.backup_path is not None else "（未备份）"
+            )
+            lines.append(f"{label}：配置已修补，补齐了以下缺失项：")
+            lines.extend(f"  + {key}" for key in result.added_keys)
+            lines.append("")
+            lines.append(f"备份：{backup_name}")
+            lines.append(f"配置文件：{location}")
+        if err_text:
+            lines.append(f"⚠ {label}仍有解析错误，fix 只补缺失项，请手工修正：{err_text}")
+    lines.append(f"generation：{state.generation()}")
     await UniMessage("\n".join(lines)).finish()
