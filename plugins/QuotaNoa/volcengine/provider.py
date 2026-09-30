@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import time
+
 from .. import state
 from ..aliases import resolve_alias_for_keys
 from ..cache import board_key, boards
@@ -82,5 +84,6 @@ async def collect_board(accounts=None, *, force: bool = False) -> QuotaBoard:
                 report.name = alias
             reports.append(report)
     board = board_from_accounts(reports)
+    board.fetched_at = time.time()
     boards.set(key, board, state.get_snapshot().cache_ttl(CHANNEL))
     return board

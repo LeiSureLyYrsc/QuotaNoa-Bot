@@ -89,6 +89,7 @@ def quota_help_text() -> str:
             "    单个账号的额度卡（跨全部实例搜索）。",
             "  /quotanoa --instance <实例>   显式指定实例，避免与渠道名冲突",
             "  /quotanoa --fresh     忽略缓存，强制重查上游",
+            "    额度默认缓存 10 分钟；命中缓存显示「缓存 N 分钟前」，实时查询显示「现在」。",
             "  /quotanoa --text      只发文字总览（排障 / 无浏览器）",
             "  /quotanoa --client <名称>   只查指定远程客户端（--client all 查全部在线客户端）",
             "  /quotanoa cooling     只看冷却中的凭证（全部实例）",

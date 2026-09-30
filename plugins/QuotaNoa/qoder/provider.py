@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from .. import state
 from ..aliases import resolve_alias_for_keys
@@ -63,5 +64,6 @@ async def collect_board(
     grouped = await asyncio.gather(*(_server_reports(server) for server in configs))
     reports = [report for group in grouped for report in group]
     board = board_from_accounts(reports)
+    board.fetched_at = time.time()
     boards.set(key, board, state.get_snapshot().cache_ttl(CHANNEL))
     return board

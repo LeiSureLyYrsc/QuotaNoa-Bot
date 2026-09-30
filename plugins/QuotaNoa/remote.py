@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import time
 import unicodedata
+from datetime import datetime, timezone
 from typing import Any
 
 from .model import AccountQuota, QuotaBoard, QuotaWindow, board_from_accounts
@@ -106,6 +108,27 @@ def _account_from_dto(dto: Any, *, client_name: str) -> AccountQuota:
     )
 
 
+def _remote_fetched_at(result: Any) -> float | None:
+    """由客户端上报的元数据推算本板数据的真实取数时间。
+
+    优先用客户端自算的 ``cache_age``（免疫两端时钟偏差）；缺失时回退解析绝对
+    ``queried_at``。都没有则返回 ``None``（展示为未知）。
+    """
+    age = _opt_float(getattr(result, "cache_age", None))
+    if age is not None:
+        return time.time() - max(0.0, age)
+    raw = getattr(result, "queried_at", "") or ""
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    return None
+
+
 def board_from_result(result: Any) -> QuotaBoard:
     """把远程 ``QuotaQueryResult`` 转为本机 ``QuotaBoard``。"""
     client_name = str(getattr(result, "client_name", "") or "")
@@ -113,4 +136,6 @@ def board_from_result(result: Any) -> QuotaBoard:
         _account_from_dto(dto, client_name=client_name)
         for dto in (getattr(result, "accounts", None) or [])
     ]
-    return board_from_accounts(accounts, cached=bool(getattr(result, "cached", False)))
+    board = board_from_accounts(accounts, cached=bool(getattr(result, "cached", False)))
+    board.fetched_at = _remote_fetched_at(result)
+    return board

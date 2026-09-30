@@ -126,6 +126,9 @@ class QuotaBoard:
     failed: int = 0
     skipped: int = 0
     cached: bool = False
+    #: 本板数据真正取自上游的时刻（``time.time()`` 秒）。命中缓存时保留旧值，
+    #: 供展示“缓存 N 分钟前 / 现在”；``None`` 表示未知（如旧客户端未上报）。
+    fetched_at: float | None = None
 
 
 WINDOW_ORDER = (
@@ -595,6 +598,35 @@ def board_from_accounts(accounts: list[AccountQuota], *, cached: bool = False) -
     board = build_board(accounts)
     board.cached = cached
     return board
+
+
+#: 判定“现在”的阈值（秒）：缓存年龄小于它视为刚刚取回。
+FRESHNESS_NOW_SECONDS = 60.0
+
+
+def format_freshness(
+    cached: bool,
+    fetched_at: float | None,
+    *,
+    now: float | None = None,
+) -> str:
+    """把额度板的新鲜度格式化为 ``现在`` / ``缓存 N 分钟前``。
+
+    - 未命中缓存 → ``现在``。
+    - 命中缓存但无取数时间（旧客户端）→ ``缓存``。
+    - 命中缓存：年龄 < ``FRESHNESS_NOW_SECONDS`` → ``缓存 刚刚``；否则按分钟向下取整。
+    """
+    if not cached:
+        return "现在"
+    if fetched_at is None:
+        return "缓存"
+    current = time.time() if now is None else now
+    age = current - float(fetched_at)
+    if age < 0:
+        age = 0.0
+    if age < FRESHNESS_NOW_SECONDS:
+        return "缓存 刚刚"
+    return f"缓存 {int(age // 60)} 分钟前"
 
 
 # --------------------------------------------------------------------------- #

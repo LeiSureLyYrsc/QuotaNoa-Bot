@@ -32,7 +32,7 @@ from ..cpa.quota import (
     platform_of,
 )
 from ..help import parse_help, quota_help_text
-from ..model import LOCAL_CHANNELS, is_all_channels, normalize_channel
+from ..model import LOCAL_CHANNELS, format_freshness, is_all_channels, normalize_channel
 from ..query import QuotaSelection, TEXT_FLAGS, parse_quota_command, strip_quota_head, tokenize
 from ..render.html import RenderError, render_board_images
 from ..volcengine.provider import collect_board as collect_volcengine_board
@@ -1014,7 +1014,13 @@ async def _send_quota_results(
             section = sections.get(key)
             account_n = len(section.accounts) if section is not None else 0
             # 每个渠道一组只发一条文字提示，随后是该组的图片。
-            outgoing.append((f"{label}{title} 额度 共 {account_n} 个账号 分 {total} 张图片显示", None))
+            freshness = format_freshness(item.cached, item.fetched_at)
+            outgoing.append(
+                (
+                    f"{label}{title} 额度 共 {account_n} 个账号 分 {total} 张图片显示（{freshness}）",
+                    None,
+                )
+            )
             outgoing.extend(("", png) for png in images)
     if not outgoing:
         await UniMessage("没有可展示的额度账号。").finish()

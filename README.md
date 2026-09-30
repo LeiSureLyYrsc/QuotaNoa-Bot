@@ -80,7 +80,7 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
         "oauth_timeout": 1800.0,
         "quota_timeout": 25.0,
         "quota_concurrency": 4,
-        "quota_cache_ttl": 60.0,
+        "quota_cache_ttl": 0.0,
         "quota_image": true
       }
     ]
@@ -101,7 +101,7 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
     ]
   },
   "refreshcache": {
-    "default": 60,                 // 未单独配置渠道的默认缓存秒数（0 = 不缓存）
+    "default": 600,                // 未单独配置渠道的默认缓存秒数（默认 10 分钟；0 = 不缓存）
     "channels": {                  // 按渠道覆盖；键为渠道名（claude/codex/火山/workbuddy…）
       "claude": 120,
       "codex": 300,
@@ -125,7 +125,7 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 | `volcengine.accounts` | 火山方舟 Coding Plan / Agent Plan 查询凭据（控制面 AccessKey，需 `ArkReadOnlyAccess`） |
 | `workbuddy.servers[]` | 每个 WorkBuddy2API 网关一项：`base_url`（如 `http://host:7863`）、`username` + `password`（控制台账号，插件自动登录换 `api_key`）、可选 `api_key`（跳过登录直连）、`timeout`。多个网关的账号会汇总到同一张 WorkBuddy 板，按网关名前缀区分 |
 | `qoder.servers[]` | 每个 Qoder2OAPI 代理一项：`name`、`base_url`（如 `http://127.0.0.1:8000`）、`api_key`、`timeout`。多个代理的号池账号会汇总到同一张 Qoder 板，按代理名前缀区分 |
-| `refreshcache` | 各渠道查询结果的缓存秒数：`default` 为兜底，`channels` 按渠道名覆盖（支持别名如 `gpt`/`火山` 归一）。CPA 实例未命中渠道覆盖时回退到实例 `quota_cache_ttl`；`0` 表示该渠道不缓存。`/quotanoa --fresh` 仍强制重查 |
+| `refreshcache` | 各渠道查询结果的缓存秒数（默认 `600` = 10 分钟）：`default` 为兜底，`channels` 按渠道名覆盖（支持别名如 `gpt`/`火山` 归一）。CPA 实例未命中渠道覆盖时回退到实例 `quota_cache_ttl`（`0` = 跟随 `default`）；`0` 表示该渠道不缓存。`/quotanoa --fresh` 仍强制重查。命中缓存时结果会标注 `缓存 N 分钟前`，实时查询标注 `现在` |
 | `render` | 额度图主题、每行卡片数（默认 3 列，范围 1..6）与每渠道账号卡片上限（默认 40），可用 `/quotanoa theme`、`/quotanoa card row`、`/quotanoa card max` 修改 |
 | `onebot-v11-feature.forward-message` | **仅 OneBot V11 适配器**生效：`true` 时把 `/quotanoa` / `/cpa quota` 的多条额度结果（标题文字 + 图片）合并成**一条合并转发**消息发出，节点署名取 Bot 真实昵称（失败回退 Bot 号）。Telegram 等其它适配器与 `false` 时按原样逐条发送；查询过程中的「正在查询…」提示始终单独发送，不参与合并 |
 | `pin-channel` | **渠道置顶**（通用，对所有适配器生效）：数组顺序即发送顺序，**左 → 右 = 上 → 下**。命中的渠道整体前置，未命中当前查询列表的渠道自动忽略，其余渠道保持默认顺序。值支持别名（`火山`→`volcengine`、`wb`→`workbuddy`、`反重力`→`antigravity`）。例：`["xai", "火山"]` 下 `/cpa quota` 全部渠道时 xAI 在最顶部（含 xAI 的 CPA 板整块浮到本地渠道之前），`/quotanoa` 默认只查本地渠道、xai 不在列表里被忽略，火山置顶 |

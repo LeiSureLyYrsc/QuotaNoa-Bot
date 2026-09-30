@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from typing import Any, Literal
@@ -140,7 +141,24 @@ class QuotaQueryResult(BaseModel):
     client_name: str
     queried_at: str = ""
     cached: bool = False
+    #: 已缓存时长（秒），由客户端计算，展示时免疫两端时钟偏差。
+    cache_age: float | None = None
+    #: 该查询作用域使用的缓存 TTL（秒）。
+    cache_ttl: float | None = None
     accounts: list[AccountQuotaDTO] = Field(default_factory=list)
+
+    @field_validator("cache_age", "cache_ttl", mode="before")
+    @classmethod
+    def sanitize_seconds(cls, value: Any) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return max(0.0, number)
 
     @field_validator("accounts")
     @classmethod

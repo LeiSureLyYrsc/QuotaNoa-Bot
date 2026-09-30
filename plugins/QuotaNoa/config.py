@@ -52,7 +52,8 @@ MIN_MAX_CARDS_PER_CHANNEL = 1
 MAX_MAX_CARDS_PER_CHANNEL = 200
 
 DEFAULT_CPA_BASE_URL = "http://127.0.0.1:8317"
-DEFAULT_REFRESH_CACHE_TTL = 60.0
+#: 渠道级缓存默认时长（秒）。10 分钟：正常查询命中缓存，``--fresh`` 强制刷新。
+DEFAULT_REFRESH_CACHE_TTL = 600.0
 
 #: 实例名 / 渠道账号名的通用长度上限。
 MAX_NAME_LEN = 32
@@ -200,7 +201,8 @@ class CpaInstance:
     oauth_timeout: float = 1800.0
     quota_timeout: float = 25.0
     quota_concurrency: int = 4
-    quota_cache_ttl: float = 60.0
+    #: 实例级缓存时长（秒）；``0`` 表示跟随 ``refreshcache.default``。
+    quota_cache_ttl: float = 0.0
     quota_image: bool = True
 
 
@@ -413,14 +415,14 @@ class ConfigSnapshot:
         """渠道级缓存 TTL（秒）。
 
         优先级：``refreshcache.channels[渠道]`` → ``fallback``（如 CPA 实例级
-        ``quota_cache_ttl``）→ ``refreshcache.default``。
+        ``quota_cache_ttl``，``<= 0`` 视为未设置）→ ``refreshcache.default``。
         """
         canonical = normalize_channel(channel) if channel else ""
         if canonical:
             ttl = self.refreshcache.channels.get(canonical)
             if ttl is not None:
                 return ttl
-        if fallback is not None:
+        if fallback is not None and fallback > 0:
             return fallback
         return self.refreshcache.default
 
@@ -535,7 +537,7 @@ def _parse_cpa_instance(entry: Any) -> CpaInstance | None:
         oauth_timeout=max(1.0, _as_float(data.get("oauth_timeout"), 1800.0)),
         quota_timeout=max(1.0, _as_float(data.get("quota_timeout"), 25.0)),
         quota_concurrency=max(1, _as_int(data.get("quota_concurrency"), 4)),
-        quota_cache_ttl=max(0.0, _as_float(data.get("quota_cache_ttl"), 60.0)),
+        quota_cache_ttl=max(0.0, _as_float(data.get("quota_cache_ttl"), 0.0)),
         quota_image=_as_bool(data.get("quota_image"), True),
     )
 

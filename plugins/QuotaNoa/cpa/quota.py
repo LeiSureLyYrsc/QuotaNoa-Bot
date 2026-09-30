@@ -27,6 +27,7 @@ from ..model import (
     calculate_plan_distribution,
     calculate_total_reset_credits,
     extract_earliest_reset_seconds,
+    format_freshness,
     format_reset_zh,
     group_window_ids_by_plan,
     prefix_instance,
@@ -132,6 +133,7 @@ def peek_quota_cache(
             if reports:
                 board = _build_board(reports)
                 board.cached = True
+                board.fetched_at = entry[1].fetched_at
                 return board
     return None
 
@@ -164,6 +166,7 @@ async def collect_quotas(
         *(_one_account(client, cfg, item, sem) for item in wanted)
     )
     board = stamp_instance(_build_board(list(reports)), instance)
+    board.fetched_at = time.time()
     ttl = snapshot.cache_ttl(platform or "", fallback=cfg.quota_cache_ttl)
     _quota_cache[cache_id] = (now + max(0.0, ttl), board)
     return board
@@ -537,7 +540,8 @@ def format_quota_board(board: QuotaBoard, *, account_limit: int = 12) -> list[st
     head = [
         "额度总览（按平台）",
         f"查询 {board.queried} | 成功 {board.ok} | 失败 {board.failed} | 仅健康 {board.skipped}"
-        + (" | 缓存" if board.cached else ""),
+        + " | "
+        + format_freshness(board.cached, board.fetched_at),
         "合计格式：窗口 剩余当量/账号数（均剩%）。1.00 = 满额一个号，不要把各账号百分比直接相加。",
     ]
     chunks: list[str] = []
