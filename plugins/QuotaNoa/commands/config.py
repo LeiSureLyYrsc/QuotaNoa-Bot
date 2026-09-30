@@ -148,11 +148,12 @@ async def quota_config_fix() -> None:
             lines.append(f"⚠ 注意：当前配置仍存在解析错误，fix 只能补缺失项，请手工修正：{error}")
         await UniMessage("\n".join(lines)).finish()
         return
+    backup_name = result.backup_path.name if result.backup_path is not None else "（未备份）"
     lines = [
         "配置已修补，补齐了以下缺失项：",
         *(f"  + {key}" for key in result.added_keys),
         "",
-        f"备份：{result.backup_path}",
+        f"备份：{backup_name}",
         f"配置文件：{result.path}",
         f"generation：{state.generation()}",
     ]
