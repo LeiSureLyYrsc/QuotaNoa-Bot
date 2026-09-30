@@ -101,6 +101,9 @@ class Hub:
     def create_app(self, cfg: ClientServerConfig, registry: ClientRegistry) -> Any:
         from fastapi import FastAPI, WebSocket
 
+        # 同步一份当前设置；路由本身每次都取实时状态（见 _serve），
+        # 这样运行中新增/删除客户端无需重启监听即可生效。
+        self.configure(cfg, registry)
         app = FastAPI(
             docs_url=None,
             redoc_url=None,
@@ -114,9 +117,22 @@ class Hub:
 
         @app.websocket("/v1/client/ws")
         async def client_ws(websocket: WebSocket) -> None:
-            await self.handle_socket(websocket, cfg, registry)
+            await self._serve(websocket)
 
         return app
+
+    async def _serve(self, websocket: Any) -> None:
+        """处理一次 WebSocket 连接，使用**当前**服务端设置与客户端注册表。
+
+        注册表必须现取：``configure()`` 只更新 ``self`` 上的引用，若由路由闭包
+        捕获启动时的快照，运行中新增的客户端会一直被判为「未注册」（403）。
+        """
+        cfg = self._cfg
+        if cfg is None:
+            await _deny(websocket, "远程客户端服务端未就绪")
+            return
+        registry = self._registry or ClientRegistry()
+        await self.handle_socket(websocket, cfg, registry)
 
     async def start(self, cfg: ClientServerConfig, registry: ClientRegistry) -> None:
         """启动独立 uvicorn 服务端（``cfg.enabled`` 为假时直接返回）。"""
@@ -313,14 +329,14 @@ class Hub:
         headers = getattr(websocket, "headers", {}) or {}
         name, error = _authenticate(headers, cfg, registry)
         if error or not name:
-            await _safe_close(websocket, _CLOSE_POLICY_VIOLATION)
             logger.warning(f"拒绝客户端连接：{error}")
+            await _deny(websocket, error or "客户端未注册")
             return
         session = ClientSession(name=name, websocket=websocket, session_id=uuid.uuid4().hex)
         async with self._lock:
             if name in self._sessions:
-                await _safe_close(websocket, _CLOSE_POLICY_VIOLATION)
                 logger.warning(f"拒绝同名客户端：{name}")
+                await _deny(websocket, f"同名客户端已在线：{name}")
                 return
             await websocket.accept()
             self._sessions[name] = session
@@ -495,3 +511,20 @@ async def _safe_close(websocket: Any, code: int) -> None:
         await websocket.close(code=code)
     except Exception:  # noqa: BLE001
         pass
+
+
+async def _deny(websocket: Any, reason: str, *, status: int = 403) -> None:
+    """在 ``accept()`` 之前拒绝连接，并把原因回传给客户端。
+
+    ASGI 服务端支持 ``websocket.http.response`` 扩展（uvicorn 支持）时，用
+    ``send_denial_response`` 返回 HTTP 403 + 纯文本原因，客户端即可显示具体
+    拒绝理由；不支持时退回普通关闭（握手同样以 403 结束，但无正文）。
+    """
+    try:
+        from starlette.responses import PlainTextResponse
+
+        await websocket.send_denial_response(PlainTextResponse(reason, status_code=status))
+        return
+    except Exception:  # noqa: BLE001 - 扩展不支持 / 已接受 / 连接已断
+        pass
+    await _safe_close(websocket, _CLOSE_POLICY_VIOLATION)
