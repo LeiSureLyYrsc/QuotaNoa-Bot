@@ -42,7 +42,7 @@ from ..protocol import normalize_client_name
 from ..query import TEXT_FLAGS, strip_quota_head, tokenize
 
 from .common import (
-    CPA_ADMIN,
+    QUOTANOA_ADMIN,
     _can_refresh_codex,
     _require_one,
     _require_platform_account,
@@ -131,7 +131,7 @@ cpa = on_alconna(
             example="cpa instance add Home http://127.0.0.1:8317 --key KEY\ncpa status Home\ncpa auth list Home claude\ncpa codex refresh Home user@example.com\ncpa login Home claude",
         ),
     ),
-    permission=CPA_ADMIN,
+    permission=QUOTANOA_ADMIN,
     auto_send_output=True,
     skip_for_unmatch=False,
     use_cmd_start=True,
@@ -146,7 +146,7 @@ async def _capture_oauth_callback(bot: Bot, event: Event) -> None:
             return
         if not has_pending(bot, event):
             return
-        if not await CPA_ADMIN(bot, event):
+        if not await QUOTANOA_ADMIN(bot, event):
             return
         text = event.get_plaintext().strip()
     except Exception:

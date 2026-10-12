@@ -47,10 +47,17 @@ async def _extra_admin(event: Event) -> bool:
         user_id = event.get_user_id()
     except Exception:
         return False
-    return user_id in state.get_snapshot().cpa.admins
+    return user_id in state.get_snapshot().quotanoa_admin
 
 
-CPA_ADMIN = SUPERUSER | Permission(_extra_admin)
+QUOTANOA_ADMIN = SUPERUSER | Permission(_extra_admin)
+
+
+async def _require_superuser(bot: Bot, event: Event) -> bool:
+    try:
+        return bool(await SUPERUSER(bot, event))
+    except Exception:
+        return False
 
 
 def _can_refresh_codex(event: Event) -> bool:
