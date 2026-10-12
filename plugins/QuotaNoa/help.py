@@ -67,7 +67,7 @@ class HelpDoc:
 def quota_help_text() -> str:
     return "\n".join(
         [
-            "QuotaNoa 额度查询（仅超级用户 / admins）",
+            "QuotaNoa 额度查询（仅超级用户 / quotanoa_admin）",
             "命令固定带 / 前缀（指令头）。",
             "",
             "【查询】默认优先展示本地渠道（火山 / WorkBuddy / Qoder）；多实例时 CPA 结果按 [实例名] 前缀区分。",
@@ -142,6 +142,13 @@ def quota_help_text() -> str:
             "  /quotanoa config reload   强制从磁盘重载配置",
             "  /quotanoa config fix      补齐缺失配置项（先备份旧文件到 data/backup/）",
             "",
+            "【管理员】管理员名单（quotanoa_admin）。",
+            "  /quotanoa admin                   查看管理员名单（同 admin list）",
+            "  /quotanoa admin list              列出管理员名单",
+            "  /quotanoa admin add <用户ID>       新增管理员",
+            "  /quotanoa admin remove <用户ID>    移除管理员",
+            "  超级用户（SUPERUSERS）始终拥有全部权限；quotanoa_admin 名单内的管理员可用 /quotanoa 与 /cpa 的除 Codex 重置外的全部命令；名单本身仅超级用户可管理；Codex 重置由 cpa.codex_refresh_admin 单独控制。",
+            "",
             "【管理】CPA 实例 / 凭证 / 登录 / Codex 重置请用 /cpa。",
         ]
     )
@@ -150,7 +157,7 @@ def quota_help_text() -> str:
 def cpa_help_text(providers: str) -> str:
     return "\n".join(
         [
-            "CLIProxyAPI 管理（仅超级用户 / admins）",
+            "CLIProxyAPI 管理（仅超级用户 / quotanoa_admin）",
             "命令前缀 / 可有可无：/cpa 与 cpa 相同。",
             "除登录回调外，所有子命令都要在第一个位置写 CPA 实例名。",
             "",

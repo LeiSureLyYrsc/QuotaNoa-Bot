@@ -68,8 +68,8 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 
 ```jsonc
 {
+  "quotanoa_admin": [],              // 管理员 user id（顶层；可用 /quotanoa admin 增删）
   "cpa": {
-    "admins": [],                    // 额外管理员 user id（全局）
     "codex_refresh_admin": [],       // 全局
     "instances": [                   // 每个实例独立连接与额度设置
       {
@@ -120,7 +120,8 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 | 段 | 说明 |
 | --- | --- |
 | `cpa.instances[]` | 每个 CLIProxyAPI 实例一项，自带 `base_url` / `management_key` / 超时 / 并发 / 缓存 / 图片开关。`base_url` 可写 `http://host:8317` 或带 `/v0/management` 的完整前缀 |
-| `cpa.admins` / `cpa.codex_refresh_admin` | 全局权限名单（与实例无关） |
+| `quotanoa_admin` | 顶层管理员名单：这些 user id 可用 `/quotanoa` 与 `/cpa`（除 Codex 重置与管理员名单管理外），与实例无关 |
+| `cpa.codex_refresh_admin` | Codex 官方重置名单：仅这些 user id 可执行 `cpa codex refresh` |
 | `quotanoa_additional_channel` | `/quotanoa` 无参默认查询的**追加渠道**：默认先查本地渠道（`volcengine`/`workbuddy`/`qoder`），再把这里的渠道追加在后。填 CPA 平台名（`claude`/`codex`/`antigravity`/`kimi`/`xai`/`gemini-cli`）即让 `/quotanoa` 也带出这些 CPA 额度；填 `all`（或 `*`）则无参 `/quotanoa` 直接输出全部渠道 |
 | `cpa_additional_channel` | `/cpa quota` 无参默认查询的**追加渠道**：默认先查全部 CPA 平台，再把这里的渠道追加在后。填本地渠道名（`volcengine`/`workbuddy`/`qoder`）即让 `/cpa quota` 也带出这些本地额度；填 `all`（或 `*`）则无参 `/cpa quota` 直接输出全部渠道 |
 | `volcengine.accounts` | 火山方舟 Coding Plan / Agent Plan 查询凭据（控制面 AccessKey，需 `ArkReadOnlyAccess`） |
@@ -193,7 +194,7 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 
 ## 命令
 
-仅超级用户 / `cpa.admins` 可用。额度查询用 `/quotanoa`（必须带指令头 `/`）；CPA 管理用 `/cpa`（前缀可有可无）。
+仅超级用户 / `quotanoa_admin` 可用。`quotanoa_admin` 中的委托管理员可使用 `/quotanoa` 与 `/cpa` 的绝大多数功能，但 Codex 重置（`cpa codex refresh`）仍限 `cpa.codex_refresh_admin`，管理员名单本身的增删（`/quotanoa admin add/remove`）也限超级用户。额度查询用 `/quotanoa`（必须带指令头 `/`）；CPA 管理用 `/cpa`（前缀可有可无）。
 
 ### 额度查询 `/quotanoa`
 
@@ -232,6 +233,10 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 | `/quotanoa config show` | 查看当前生效配置（密钥脱敏）与最近解析错误 |
 | `/quotanoa config reload` | 强制从磁盘重载配置 |
 | `/quotanoa config fix` | 修补主配置与客户端配置：按内置默认补齐缺失的设置项（不覆盖已有值），写回前先把旧文件备份到 `data/backup/quotanoa_config_<日期>-<时间>_bak.json`（客户端文件为 `quotanoa_client_<日期>-<时间>_bak.json`；备份目录常量在 `plugins/QuotaNoa/config.py` 的 `DEFAULT_BACKUP_DIR`）。配置已完整时不做任何写盘 |
+| `/quotanoa admin` | 查看当前 `quotanoa_admin` 名单（仅超级用户） |
+| `/quotanoa admin list` | 同上，列出全部管理员 user id（仅超级用户） |
+| `/quotanoa admin add <用户ID>` | 将指定 user id 加入 `quotanoa_admin`（仅超级用户） |
+| `/quotanoa admin remove <用户ID>` | 将指定 user id 从 `quotanoa_admin` 移除（仅超级用户） |
 
 ### CPA 管理 `/cpa`
 

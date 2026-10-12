@@ -20,8 +20,9 @@ async def quota_config_show() -> None:
         f"配置文件：{state.snapshot_path() or '（内存模式）'}",
         f"generation：{state.generation()}",
         "",
+        f"quotanoa_admin：{', '.join(snapshot.quotanoa_admin) or '（未设置）'}",
+        "",
         "cpa：",
-        f"  admins：{', '.join(cpa.admins) or '（未设置）'}",
         f"  codex_refresh_admin：{', '.join(cpa.codex_refresh_admin) or '（未设置）'}",
         f"  实例数：{len(cpa.instances)}",
     ]

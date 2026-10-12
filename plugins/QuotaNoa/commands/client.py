@@ -1,7 +1,7 @@
 """/quotanoa client：远程客户端（Server 模式）实例与服务端开关管理。
 
 服务端监听设置与客户端列表均存于独立文件 ``data/quotanoa_client.json`` 的 ``server``
-段与顶层 ``clients`` 列表（首建即生成，服务器模式默认关）。命令仅超级用户 / admins 可用。
+段与顶层 ``clients`` 列表（首建即生成，服务器模式默认关）。命令仅超级用户 / quotanoa_admin 可用。
 """
 
 from __future__ import annotations
