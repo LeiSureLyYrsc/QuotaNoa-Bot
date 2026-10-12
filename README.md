@@ -109,6 +109,30 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
       "volcengine": 0
     }
   },
+  "generic": {
+    "use_quota_fetch": true,       // 优先用 CPA 通用 /quota/fetch（零配置）
+    "use_signals": true,           // 其次用 /auth-files 的 quota.signals 被动观测
+    "probes": {                    // 最后按渠道声明探测（键 = 未适配 provider 名）
+      "devin": {
+        "url": "https://api.example.com/quota",
+        "method": "GET",
+        "header": { "Authorization": "Bearer $TOKEN$" },
+        "data": "",
+        "mapping": {
+          "plan": "userStatus.planStatus.planInfo.planName",
+          "groups": [
+            {
+              "display_name": "Quota",
+              "buckets_path": "userStatus.planStatus.windows",
+              "window_key": "id",
+              "remaining_fraction_key": "remainingPercent",
+              "reset_time_key": "resetAt"
+            }
+          ]
+        }
+      }
+    }
+  },
   "render": { "theme": "default", "cards_per_row": 3, "max_cards_per_channel": 40 },
   "onebot-v11-feature": { "forward-message": false },
   "pin-channel": [],                // 渠道置顶顺序（通用，对所有适配器生效；如 ["xai", "火山"]）
@@ -130,7 +154,8 @@ telegram_bots=[{"token": "123456:ABC-DEF"}]
 | `refreshcache` | 各渠道查询结果的缓存秒数（默认 `600` = 10 分钟）：`default` 为兜底，`channels` 按渠道名覆盖（支持别名如 `gpt`/`火山` 归一）。CPA 实例未命中渠道覆盖时回退到实例 `quota_cache_ttl`（`0` = 跟随 `default`）；`0` 表示该渠道不缓存。`/quotanoa --fresh` 仍强制重查。命中缓存时结果会标注 `缓存 N 分钟前`，实时查询标注 `现在` |
 | `render` | 额度图主题、每行卡片数（默认 3 列，范围 1..6）与每渠道账号卡片上限（默认 40），可用 `/quotanoa theme`、`/quotanoa card row`、`/quotanoa card max` 修改 |
 | `onebot-v11-feature.forward-message` | **仅 OneBot V11 适配器**生效：`true` 时把 `/quotanoa` / `/cpa quota` 的多条额度结果（标题文字 + 图片）合并成**一条合并转发**消息发出，节点署名取 Bot 真实昵称（失败回退 Bot 号）。Telegram 等其它适配器与 `false` 时按原样逐条发送；查询过程中的「正在查询…」提示始终单独发送，不参与合并 |
-| `pin-channel` | **渠道置顶**（通用，对所有适配器生效）：数组顺序即发送顺序，**左 → 右 = 上 → 下**。命中的渠道整体前置，未命中当前查询列表的渠道自动忽略，其余渠道保持默认顺序。值支持别名（`火山`→`volcengine`、`wb`→`workbuddy`、`反重力`→`antigravity`）。例：`["xai", "火山"]` 下 `/cpa quota` 全部渠道时 xAI 在最顶部（含 xAI 的 CPA 板整块浮到本地渠道之前），`/quotanoa` 默认只查本地渠道、xai 不在列表里被忽略，火山置顶 |
+| `pin-channel` | **渠道置顶**（通用，对所有适配器生效）：数组顺序即发送顺序，**左 → 右 = 上 → 下**。命中的渠道整体前置，未命中当前查询列表的渠道自动忽略，其余渠道保持默认顺序。值支持别名（`火山`→`volcengine`、`wb`→`workbuddy`、`反重力`→`antigravity`）与**未适配 provider 名**。例：`["xai", "火山"]` 下 `/cpa quota` 全部渠道时 xAI 在最顶部（含 xAI 的 CPA 板整块浮到本地渠道之前），`/quotanoa` 默认只查本地渠道、xai 不在列表里被忽略，火山置顶 |
+| `generic` | **泛式额度兼容**：让未专门适配的 provider 也显示额度条。三级降级，命中即用：① CPA 通用 `POST /quota/fetch`（零配置，需 CPA 侧有额度插件或凭证带 `quota_probe`）② `/auth-files` 的 `quota.signals` 被动观测 ③ `probes` 里按渠道声明的探测。`use_quota_fetch` / `use_signals` 可分别关闭。`probes.<provider>` 的 `url` / `header` / `data` 可用 `$TOKEN$`（由 CPA 替换为凭证令牌）；`mapping` 语法与 CPA `quota_probe` 完全一致。三级都拿不到时**静默留空**（卡片显示「无上游额度」），只有显式配置的探测失败才如实报错 |
 
 别名文件路径由代码（`plugins/QuotaNoa/config.py` 的 `DEFAULT_ALIASES_FILE`）决定，默认 `data/quotanoa_aliases.json`，**不写入生成的配置文件**；如需改路径，可在 JSON 里显式加可选覆盖项 `"aliases_file"`（旧配置兼容）。
 
@@ -203,7 +228,7 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 | `/quotanoa` | **默认**先查本地渠道（火山 / WorkBuddy / Qoder），再追加 `quotanoa_additional_channel` 里的渠道；多实例时 CPA 结果按 `[实例名]` 前缀区分 |
 | `/quotanoa all` | 查询**全部渠道**：本地渠道 + 全部 CPA 平台（同义 `--all` / `-a`，与 `/cpa quota all` 内容一致） |
 | `/quotanoa help` | 查看帮助图（同义 `--help` / `-h`；加 `--text` 只发文字）。帮助图主题跟随 `render.theme`（`/quotanoa theme`），渲染失败自动回退文字（原因只写终端日志，不在聊天里提示） |
-| `/quotanoa <平台>` | 只看一个平台：`claude` / `codex`(gpt, openai) / `antigravity`(反重力, agy) / `kimi` / `xai` / `workbuddy`(wb) / `qoder` |
+| `/quotanoa <平台>` | 只看一个平台：`claude` / `codex`(gpt, openai) / `antigravity`(反重力, agy) / `kimi` / `xai` / `workbuddy`(wb) / `qoder`；也接受**未适配 provider 名**（在 `quotanoa_aliases.json` 的 `channel_keywords` 里映射即可，如 `devin`） |
 | `/quotanoa 火山` | 查询火山方舟 Coding Plan + Agent Plan 额度（档位、用量、订阅到期；同义：`volc` / `volcengine` / `ark` / `火山方舟`） |
 | `/quotanoa workbuddy` | 查询全部 WorkBuddy 网关的积分额度（同义：`wb`） |
 | `/quotanoa qoder` | 查询全部 Qoder2OAPI 代理的号池额度（同义：`qd`） |
@@ -272,7 +297,7 @@ Bot 可同时作为独立的远程客户端服务端（**独立 FastAPI 实例**
 }
 ```
 
-写入后 `/quotanoa agy` 等同 `/quotanoa antigravity`。渠道名必须能归一到内置渠道（`claude` / `codex` / `antigravity` / `kimi` / `xai` / `gemini-cli` / `volcengine` / `workbuddy` / `qoder`）。
+写入后 `/quotanoa agy` 等同 `/quotanoa antigravity`。渠道名可归一到内置渠道（`claude` / `codex` / `antigravity` / `kimi` / `xai` / `gemini-cli` / `volcengine` / `workbuddy` / `qoder`），也接受**未适配 provider 名**（如 `devin` / `iflow`），因此可以用它给任何凭证起查询关键字。
 
 WorkBuddy 卡片/文字里的倒计时是**重置**语义，固定显示为 `最早的(空)套餐 XdXh 后过期`，表示该账号所有周期套餐中**最先到期**的那个还剩多久；其进度条百分比则是**所有套餐聚合**的剩余比例，两者口径不同。
 
@@ -345,7 +370,9 @@ themes/<主题名>/
 
 帮助图与额度卡错误框共用一套**可复用字段高亮**（`plugins/QuotaNoa/render/highlight.py`）：把命令（`cmd`）、占位参数（`arg`）、开关（`opt`）、配置键（`key`）、告警（`warn`）在文本里自动标出。任意文本一行调用 `highlight_html(text)` 即可套用（输出已转义），配色由各主题的 `--hl-*` 变量决定。
 
-支持的上游：Claude OAuth usage、Codex WHAM usage、Antigravity `retrieveUserQuotaSummary` + `loadCodeAssist`（套餐）、Kimi usages、xAI billing credits、**火山方舟 Coding Plan / Agent Plan**（控制面 `GetCodingPlanUsage` 与 `GetAFPUsage`）、**WorkBuddy2API**（`GET /v1/quota`，聚合积分 + 套餐数）、**Qoder2OAPI**（`GET /v1/dashboard/billing/credits`，号池聚合 + 每账号 general/addon/dedicated 分桶；账号 `user_type` 会映射为订阅档位：个人 = 体验版 / 专业版 / 高级版 / 旗舰版，企业 = 团队版 / 企业标准版，兼容 `personal_professional` 与 `PLAN_TIER_*` / `ORGANIZATION_PLAN_TIER_*` 两种写法）。Antigravity 的 `account_type=oauth` 只是登录方式，套餐来自 `paidTier`（Pro / Plus / Ultra）。未知 / API-key 渠道只显示本地健康状态。
+支持的上游：Claude OAuth usage、Codex WHAM usage、Antigravity `retrieveUserQuotaSummary` + `loadCodeAssist`（套餐）、**Kimi `GET /coding/v1/usages`（5h / 月总额 / 月代码，`usages` 里未来新增的周期键会被自动识别）+ `GET /coding/v1/me`（会员类型，如 `Plus`）**、xAI billing credits、**火山方舟 Coding Plan / Agent Plan**（控制面 `GetCodingPlanUsage` 与 `GetAFPUsage`）、**WorkBuddy2API**（`GET /v1/quota`，聚合积分 + 套餐数）、**Qoder2OAPI**（`GET /v1/dashboard/billing/credits`，号池聚合 + 每账号 general/addon/dedicated 分桶；账号 `user_type` 会映射为订阅档位：个人 = 体验版 / 专业版 / 高级版 / 旗舰版，企业 = 团队版 / 企业标准版，兼容 `personal_professional` 与 `PLAN_TIER_*` / `ORGANIZATION_PLAN_TIER_*` 两种写法）。Antigravity 的 `account_type=oauth` 只是登录方式，套餐来自 `paidTier`（Pro / Plus / Ultra）。
+
+**未适配的 provider 走 `generic` 段的三级降级**（见配置表）：CPA 通用 `POST /quota/fetch` → `quota.signals` 被动观测 → 自建声明式探测。命中后该 provider **独立成板**（标题自动 title-case），额度窗口正常出进度条；`summary[]` 这类无上下限的数值（余额、消费额）渲染为**纯文本指标行**，不画进度条。三级全空时该账号显示「无上游额度」而**不报错**。
 
 火山方舟凭据请用**控制面 OpenAPI** 的 AccessKey ID + SecretAccessKey（`volcengine.accounts[]`，需子账户具备 `ArkReadOnlyAccess` 权限），**不是**推理 Key（`ark-...` 查不了额度）。Bot 直接对 `open.volcengineapi.com` 做 SigV4 签名请求。
 

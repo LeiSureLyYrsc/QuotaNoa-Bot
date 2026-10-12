@@ -132,6 +132,112 @@ curl -X PUT -H 'Content-Type: application/json' \
 }
 ```
 
+### 通用额度（Generic Quota）
+
+CLIProxyAPI **没有**账号池额度聚合接口，但自 v8 起提供了一组**厂商无关**的归一化额度路由。它们让任何 provider 都能在不改 CPA 核心的前提下暴露额度：
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | `/quota/providers` | 已注册的额度 provider 列表。无插件时返回 `{"providers":[]}` |
+| POST | `/quota/fetch` | 取某凭证的归一化额度。无可用 provider 时 **501** |
+| POST | `/quota/reset` | 重置某凭证的额度 / 用量（需 provider 支持） |
+| GET | `/plugins/:id/quota?auth_index=` | 指定插件的额度（`auth_index` / `authIndex` 均可） |
+| POST | `/plugins/:id/quota` | 同上，`auth_index` 走 body |
+| DELETE | `/plugins/:id/quota` | 重置该插件的额度，成功后顺带清核心路由冷却 |
+| POST | `/plugins/:id/quota/reset` | 同上（重置） |
+
+`POST /quota/fetch` 请求：
+
+```json
+{ "auth_index": "<AUTH_INDEX>", "plugin_id": "<可省略>", "provider": "<可省略，默认取凭证 provider>" }
+```
+
+返回的归一化契约（`sdk/pluginapi/types.go` 的 `QuotaFetchResponse`）：
+
+```json
+{
+  "subscription": { "plan": "Pro", "tierName": "pro-tier", "tierId": "g1-pro-tier" },
+  "summary": [
+    { "key": "balance", "label": "余额", "value": 12.5, "unit": "USD", "format": "currency", "currency": "USD" }
+  ],
+  "groups": [
+    {
+      "displayName": "Weekly",
+      "buckets": [
+        { "window": "weekly", "remainingFraction": 0.42, "resetTime": "2026-11-01T00:00:00Z", "description": "周额度" }
+      ]
+    }
+  ],
+  "serverTimeOffsetMs": 1200
+}
+```
+
+字段语义：
+
+| 字段 | 说明 |
+| --- | --- |
+| `subscription.plan` / `tierName` / `tierId` | 套餐 / 档位。三者都接受 camelCase 与 `tier_name` / `tier_id` snake_case 写法 |
+| `summary[]` | **无上下限的数值指标**（余额、消费额…）。`format` 为 `number` 或 `currency`；`currency` 必须是合法 ISO 4217 |
+| `groups[].buckets[].remainingFraction` | **剩余**比例。`remaining_fraction` 亦可；`>1` 时按百分数解释 |
+| `groups[].buckets[].resetTime` | 该窗口的下次刷新时刻。`reset_time` 亦可 |
+| `groups[].buckets[].description` | 展示名；缺省时回退 `window` |
+| `serverTimeOffsetMs` | 上游时钟与本地之差，供前端校正倒计时 |
+
+`/quota/fetch` 的四种结果：
+
+| HTTP | body | 含义 |
+| --- | --- | --- |
+| 200 | 上述契约 | 成功 |
+| **501** | `{"error":"no quota provider available for credential"}` | **既没有注册额度 provider，凭证 metadata 也没有 `quota_probe`** |
+| 404 | `{"error":"auth not found"}` | `auth_index` 不存在 |
+| 400 | `{"error":"auth_index is required"}` | 缺 `auth_index` |
+
+> 501 是**常态而非故障**：它表示这个 provider 未适配额度查询。调用方应当静默降级，不要报错。
+
+#### 声明式额度探测（`quota_probe`）
+
+无需写插件：在凭证 metadata 里放一个 `quota_probe` 对象，CPA 就会在 `/quota/fetch` 里执行它。
+
+```json
+{
+  "quota_probe": {
+    "url": "https://example.com/api/quota",
+    "method": "GET",
+    "header": { "Authorization": "Bearer $TOKEN$" },
+    "data": "",
+    "mapping": {
+      "plan": "userStatus.planStatus.planInfo.planName",
+      "groups": [
+        {
+          "display_name": "Quota",
+          "buckets_path": "userStatus.planStatus.windows",
+          "window_key": "id",
+          "remaining_fraction_key": "remainingPercent",
+          "reset_time_key": "resetAt",
+          "description_key": "label"
+        }
+      ]
+    }
+  }
+}
+```
+
+- `$TOKEN$` 会在 `url`、`data`、`header` 的值里被替换为所选凭证的 access token / API key。
+- `mapping` **省略**时，CPA 直接把上游 JSON 当作归一化契约解析（即上游已返回 `groups` / `subscription` / `summary` 形状）。
+- `mapping` 存在时按下面两条路径映射：
+
+| 写法 | 字段 | 说明 |
+| --- | --- | --- |
+| 套餐 | `plan`、`tier_name` / `tierName`、`tier_id` / `tierId` | 点分路径。**路径未命中不做事后字面量回退** |
+| 组 | `groups[].display_name` / `displayName` | 组名。路径命中用值，否则用**字面量** |
+| 组 | `groups[].buckets_path` | 桶数组路径，配合下列 `*_key`（值是数组元素内的字段名） |
+| 组 | `window_key`（默认 `window`）、`remaining_fraction_key`（默认 `remaining_fraction`）、`reset_time_key`（默认 `reset_time`）、`description_key`（默认 `description`） | 桶字段名 |
+| 组 | `remaining_amount_key` + `total_amount_key` | 无比例字段时用两者比值 |
+| 组 | `groups[].buckets[]` | 显式逐桶声明：`window` / `remaining_fraction` / `remaining_amount` / `total_amount` / `reset_time` / `description`，值为路径或字面量 |
+| 指标 | `summary[]` | CPA 侧只读取上游的 `summary` 数组（`key` / `label` / `value` 必需） |
+
+`remainingFraction` 过滤规则：只有**能解析出有效数字**的桶才会保留；无效桶被丢弃，不会整体失败。
+
 ### 代理入口 API Key
 
 这些接口更新 `auth.providers` 里的 inline `config-api-key`。旧的顶层 `api-keys` 会自动同步。
@@ -319,6 +425,36 @@ curl -X PATCH -H 'Authorization: Bearer <MANAGEMENT_KEY>' \
 
 配置型 API-key 记录通过各自的 `excluded-models` 禁用；插件虚拟子项不能独立改状态。
 
+#### 被动额度观测字段
+
+`/auth-files` 的条目还会暴露一组**只读**的额度相关字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `quota.observed_at` | 最近一次观测时刻。每次收到带额度水位的响应都会推进，即使数值没变 |
+| `quota.signals` | `string → string` 的**当前**水位快照。**是替换而非累积**：`Retry-After`、`limit reached` 这类只在产生它的那一次响应里出现 |
+| `model_quotas` | 按模型维度的观测快照（结构同 `quota`），仅在存在时返回 |
+| `supports_quota` | `true` 表示该凭证有可用的额度 provider（插件或声明式探测） |
+| `quota_provider` | 提供额度的插件标识 |
+| `quota_probe` | 凭证 metadata 里声明的探测配置（原样回显） |
+
+> `quota` 字段**只承载被动观测**，绝不包含调度 / 冷却状态（`exceeded`、`next_recover_at`、`backoff_level` 等由其他字段承载）。没有额度水位的响应（网络失败、5xx、无关端点）**保留上一次快照**，不会清空。
+
+`quota.signals` 是**被动**的：CPA 只从普通响应的头部里采集，不额外发请求。目前**只有 `claude` 与 `codex` 被采集**（`ProviderSupportsQuotaObservation`）；Kimi / xAI / Antigravity / Gemini 家族的普通响应头部不代表凭证级剩余额度，因此不采集。
+
+已知键名族：
+
+| 形态 | 键名 | 语义 |
+| --- | --- | --- |
+| Claude | `anthropic-ratelimit-unified-*`、`retry-after` | Claude 统一限流水位 |
+| Codex | `x-codex-plan-type` | 套餐类型 |
+| Codex | `x-codex-allowed`、`x-codex-limit-reached` | 布尔水位 |
+| Codex | `x-codex-primary-*` / `x-codex-secondary-*` | 主 / 次窗口 |
+| Codex | `x-codex-*-(used-percent\|remaining-percent\|reset-at\|reset-after-seconds\|window-minutes)` | 数值水位 |
+| Codex | `x-codex-additional-*`、`x-codex-code-review-*` | 附加 / 细分限额（按 limit 名命名空间） |
+| Codex | `x-codex-credits-*` | 额度余额 |
+| Devin 风格 | `{prefix}_quota_remaining_percent`、`{prefix}_quota_reset_at` | snake_case 配额对 |
+
 ### 内置登录（OAuth）
 
 当前 **main 内置**只有下列登录入口。Gemini CLI / Qwen / iFlow 等已从核心路由移除，改由插件动态挂 `*-auth-url`。
@@ -460,6 +596,65 @@ POST 也可用 `redirect_url` 携带 callback query。`provider` 必须与 pendi
 7. **入口密钥**：`/api-keys`。
 
 不要依赖已删除的 `/usage`、`/usage/export`、`/usage/import`。也不要把 `gemini-cli-auth-url`、`qwen-auth-url`、`iflow-auth-url`、`ampcode/*` 写死进 Bot；当前 main 已不注册它们。
+
+### 泛式额度适配（三级降级）
+
+要支持**未专门适配**的 provider，按下列优先级尝试，命中即用：
+
+1. **`POST /quota/fetch`** —— 首选，零配置。CPA 侧注册了额度插件，或凭证 metadata 带 `quota_probe` 时直接可用。
+   - `501` 表示**没有 provider**，属常态，应静默降级而不是报错。
+2. **`/auth-files` 的 `quota.signals`** —— 次选。被动观测，无额外请求，但当前仅 `claude` / `codex` 有值。
+3. **自建声明式探测** —— 兜底。用与 `quota_probe` **相同的 `mapping` 语法**探测任意上游；`$TOKEN$` 由 CPA 的 `/api-call` 替换。URL 必须来自配置文件，**永远不要**从聊天 / 终端用户输入取 URL。
+
+`remainingFraction` 与 `used_percent` 的换算：`remaining_percent = remainingFraction * 100`（`>1` 视作百分数），`used_percent = 100 - remaining_percent`。`summary[]` 是无上下限的**数值指标**（余额、消费额），不要画成进度条。
+
+### 上游额度端点参考
+
+各 provider 的额度来源（经 CPA `POST /api-call` 转发，`$TOKEN$` 由 CPA 替换）：
+
+| Provider | 端点 | 关键字段 |
+| --- | --- | --- |
+| Claude | `https://api.anthropic.com/api/oauth/usage` | `five_hour` / `seven_day*` 的 `utilization`、`resets_at`；`plan_type` |
+| Codex | `https://chatgpt.com/backend-api/wham/usage` | `rate_limit.primary_window` / `secondary_window` 的 `used_percent`、`reset_at`、`limit_window_seconds`；`plan_type` |
+| Codex 重置券 | `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`（`/consume` 消耗） | `available_count`、`credits[]` |
+| Antigravity | `https://{daily-,}cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`（沙箱与正式域） | `groups[].buckets[]` 的 `remainingFraction`、`resetTime` |
+| Antigravity 套餐 | `…/v1internal:loadCodeAssist` | `paidTier` / `currentTier` |
+| Kimi 用量 | `https://api.kimi.com/coding/v1/usages`（`.ai` 域同理） | 见下 |
+| Kimi 会员 | `https://api.kimi.com/coding/v1/me`（`.ai` 域同理） | `user_level_name`、`user_level`、`goods_version` |
+| xAI / Grok | `https://cli-chat-proxy.grok.com/v1/billing?format=credits` | `creditUsagePercent`、`billingPeriodEnd`、`productUsage[]` |
+| Gemini CLI | `https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | `models[]` 的 `remainingFraction`、`resetTime` |
+
+#### Kimi 端点细节
+
+`GET /coding/v1/usages` 响应：
+
+```json
+{
+  "limits": [
+    {
+      "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+      "detail": { "limit": "100", "remaining": "100", "resetTime": "2026-10-12T13:43:59.716608Z" }
+    }
+  ],
+  "usages": {
+    "limit_5h":          { "used_ratio": 0.0021, "reset_time": "2026-10-12T13:43:59Z" },
+    "limit_month_total": { "used_ratio": 0.0001, "reset_time": "2026-11-12T00:00:00Z" },
+    "limit_month_code":  { "used_ratio": 0.0001, "reset_time": "2026-11-12T00:00:00Z" }
+  }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `usages.<key>.used_ratio` | **已用**比例（0–1）。`>1` 时按百分数解释 |
+| `usages.<key>.reset_time` | 该窗口刷新时刻（RFC 3339） |
+| `usages` 键名 | `limit_5h` / `limit_month_total` / `limit_month_code` 为当前已知键；**未来新增键应被自动识别**，不要写死 |
+| `limits[].window.duration` + `timeUnit` | 窗口长度。`TIME_UNIT_MINUTE` / `_SECOND` / `_HOUR` / `_DAY` / `_WEEK`，用于推断 `limits[]` 属于哪个周期 |
+| `limits[].detail.limit` / `.remaining` | 绝对量（字符串数字）。与 `usages` **同周期**时只作补充，不重复展示 |
+
+> **会员类型不在凭证文件里**。`GET /auth-files/download` 拿到的 Kimi 凭证只有 `access_token` / `refresh_token` / `domain` / `scope` / `type`，`/auth-files` 列表里也没有套餐字段。要显示档位（`Plus` / `Level 20`…）必须额外查 `GET /coding/v1/me` 读 `user_level_name`。
+
+域选择：Kimi 凭据有 `.com`（`api.kimi.com`）与 `.ai`（`api.kimi.ai`）两套。请按凭证的 `domain` 字段判断；缺失时回退 `base_url` 主机名，再回退 `type` / `provider`。
 
 ### CLIProxyAPI 原生插件再挂自己的管理接口
 
