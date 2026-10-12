@@ -30,6 +30,9 @@ class QuotaWindow:
     #: 该窗口进度条的"主方向"："" = 自动推断（旧数据按 id 前缀，如 grok- 视为已用）；
     #: "remaining" = 表示剩余（多数渠道）；"used" = 表示已用（如火山 Percent）。
     direction: str = ""
+    #: 窗口形态："" = 常规额度条（画进度条）；"metric" = 纯数值指标行（只展示
+    #: label + ``reset_note``，不画进度条），供 ``/quota/fetch`` 的 summary[] 使用。
+    kind: str = ""
 
 
 def window_is_used(window: QuotaWindow) -> bool:
@@ -153,6 +156,10 @@ WINDOW_ORDER = (
     "grok-chat",
     "grok-imagine",
     "usage",
+    "kimi-5h",
+    "kimi-week",
+    "kimi-month",
+    "kimi-month-code",
     "wb-credits",
     "qoder-general",
     "qoder-addon",
@@ -232,6 +239,58 @@ def is_channel_name(value: str) -> bool:
     return bool(normalize_channel(value))
 
 
+#: 动态渠道 token 的最大长度。
+MAX_PLATFORM_TOKEN = 32
+
+
+def normalize_platform_token(value: str) -> str:
+    """把任意 provider/channel 值归一为展示与聚合用的安全平台键。
+
+    已知别名 → canonical 渠道名；未知 → 净化后的动态 token（小写、``_``→``-``、
+    仅保留 ``[a-z0-9-]``、去首尾 ``-``、限长 :data:`MAX_PLATFORM_TOKEN`）。
+    空值或净化后为空 → ``"other"``。
+
+    这是「泛式额度」的入口：未专门适配的项目也能凭 provider 值独立成板，
+    而不是全部折叠进 ``"other"``。
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return "other"
+    known = CHANNEL_ALIASES.get(raw.lower().replace("_", "-"), "") or CHANNEL_ALIASES.get(raw, "")
+    if known:
+        return known
+    slug = re.sub(r"[^a-z0-9-]+", "-", raw.lower().replace("_", "-")).strip("-")
+    if not slug:
+        return "other"
+    return slug[:MAX_PLATFORM_TOKEN]
+
+
+def is_known_platform(value: str) -> bool:
+    """该值是否命中内置渠道表（而非动态 token）。"""
+    return bool(normalize_channel(value))
+
+
+def platform_key(value: str) -> str:
+    """配置里的渠道键归一：内置别名优先，其次动态 token；无效键返回空串。
+
+    与 :func:`normalize_platform_token` 的差别：后者把无效值兜底为 ``"other"``，
+    本函数把 ``other`` / 空值视为**无效**并返回空串，供配置列表过滤用。
+    """
+    key = normalize_platform_token(value)
+    return "" if key == "other" else key
+
+
+def platform_title(key: str) -> str:
+    """平台展示标题：内置渠道用 :data:`PLATFORM_TITLES`，动态渠道 title-case。"""
+    known = PLATFORM_TITLES.get(key)
+    if known:
+        return known
+    words = [word for word in str(key or "").split("-") if word]
+    if not words:
+        return key
+    return " ".join(word.upper() if len(word) <= 2 and word.isalpha() else word.capitalize() for word in words)
+
+
 #: 额外渠道配置里的“全部渠道”关键字（等价于命令的 ``all`` / ``--all``）。
 ALL_CHANNELS_TOKEN = "all"
 
@@ -242,9 +301,9 @@ def is_all_channels(value: str) -> bool:
 
 
 def channel_of(file: Mapping[str, Any]) -> str:
-    """从 CPA 凭证字典推断渠道；未知归入 other。"""
-    raw = str(file.get("provider") or file.get("type") or "").strip().lower().replace("_", "-")
-    return CHANNEL_ALIASES.get(raw, "other")
+    """从 CPA 凭证字典推断渠道；未知 provider 归为动态 token（空值归 ``other``）。"""
+    raw = str(file.get("provider") or file.get("type") or "").strip()
+    return normalize_platform_token(raw)
 
 
 def calculate_plan_distribution(accounts: list[AccountQuota]) -> list[tuple[str, int]]:
@@ -309,7 +368,7 @@ def _classify_model_category(window_id: str, window_label: str = "") -> str:
         return "Claude"
     if wid.startswith("grok-") or wid == "billing" or "grok" in lbl or "xai" in lbl:
         return "xAI"
-    if wid.startswith("limit-") or wid == "usage" or "kimi" in lbl:
+    if wid.startswith("limit-") or wid.startswith("kimi-") or wid == "usage" or "kimi" in lbl:
         return "Kimi"
 
     # Fallback to normalized window label or id or 其他
@@ -522,67 +581,79 @@ def _window_span(window: QuotaWindow) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _tally_account(account: AccountQuota, counters: dict[str, int]) -> None:
+    if account.error:
+        counters["failed"] += 1
+    elif account.windows:
+        counters["ok"] += 1
+    else:
+        counters["skipped"] += 1
+
+
+def _section_aggregates(accounts: list[AccountQuota]) -> dict[str, Any]:
+    """按账号列表汇总窗口剩余分与绝对量（平台板与动态板共用）。"""
+    remain_sum: dict[str, float] = {}
+    remain_count: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    remaining_sum = 0.0
+    limit_sum = 0.0
+    for account in accounts:
+        for window in account.windows:
+            labels.setdefault(window.id, window.label)
+            if window.remaining_percent is not None:
+                remain_sum[window.id] = remain_sum.get(window.id, 0.0) + window.remaining_percent
+                remain_count[window.id] = remain_count.get(window.id, 0) + 1
+            if window.remaining is not None:
+                remaining_sum += window.remaining
+            if window.limit is not None:
+                limit_sum += window.limit
+    return {
+        "window_remain_sum": remain_sum,
+        "window_remain_count": remain_count,
+        "window_labels": labels,
+        "remaining_sum": remaining_sum,
+        "limit_sum": limit_sum,
+    }
+
+
 def build_board(reports: list[AccountQuota]) -> QuotaBoard:
     """把账号额度列表按平台聚合为展示板。"""
     grouped: dict[str, list[AccountQuota]] = {}
     for report in reports:
         grouped.setdefault(report.platform, []).append(report)
     platforms: list[PlatformQuota] = []
-    ok = failed = skipped = 0
+    counters = {"ok": 0, "failed": 0, "skipped": 0}
     for key in PLATFORM_ORDER:
         accounts = grouped.pop(key, [])
         if not accounts:
             continue
-        remain_sum: dict[str, float] = {}
-        remain_count: dict[str, int] = {}
-        labels: dict[str, str] = {}
-        remaining_sum = 0.0
-        limit_sum = 0.0
         for account in accounts:
-            if account.error:
-                failed += 1
-            elif account.windows:
-                ok += 1
-            else:
-                skipped += 1
-            for window in account.windows:
-                labels.setdefault(window.id, window.label)
-                if window.remaining_percent is not None:
-                    remain_sum[window.id] = remain_sum.get(window.id, 0.0) + window.remaining_percent
-                    remain_count[window.id] = remain_count.get(window.id, 0) + 1
-                if window.remaining is not None:
-                    remaining_sum += window.remaining
-                if window.limit is not None:
-                    limit_sum += window.limit
+            _tally_account(account, counters)
         platforms.append(
             PlatformQuota(
                 platform=key,
-                title=PLATFORM_TITLES.get(key, key),
+                title=platform_title(key),
                 accounts=accounts,
-                window_remain_sum=remain_sum,
-                window_remain_count=remain_count,
-                window_labels=labels,
-                remaining_sum=remaining_sum,
-                limit_sum=limit_sum,
+                **_section_aggregates(accounts),
             )
         )
     for leftover, accounts in sorted(grouped.items()):
+        for account in accounts:
+            _tally_account(account, counters)
         platforms.append(
             PlatformQuota(
                 platform=leftover,
-                title=PLATFORM_TITLES.get(leftover, leftover),
+                title=platform_title(leftover),
                 accounts=accounts,
-                window_remain_sum={},
-                window_remain_count={},
+                **_section_aggregates(accounts),
             )
         )
-        skipped += len(accounts)
     return QuotaBoard(
         platforms=platforms,
         queried=len(reports),
-        ok=ok,
-        failed=failed,
-        skipped=skipped,
+        ok=counters["ok"],
+        failed=counters["failed"],
+        skipped=counters["skipped"],
     )
 
 
