@@ -8,6 +8,13 @@ import httpx
 
 from ..config import CpaConfig
 
+try:
+    from nonebot.log import logger
+except Exception:  # pragma: no cover
+    import logging
+
+    logger = logging.getLogger("QuotaNoa.cpa.client")
+
 # 只允许额度巡检用到的上游。不要把 /api-call 做成聊天里的任意代发。
 _API_CALL_ALLOWLIST: tuple[tuple[str, str], ...] = (
     ("api.anthropic.com", "/api/oauth/usage"),
@@ -15,6 +22,9 @@ _API_CALL_ALLOWLIST: tuple[tuple[str, str], ...] = (
     ("chatgpt.com", "/backend-api/wham/rate-limit-reset-credits"),
     ("chatgpt.com", "/backend-api/wham/rate-limit-reset-credits/consume"),
     ("api.kimi.com", "/coding/v1/usages"),
+    ("api.kimi.com", "/coding/v1/me"),
+    ("api.kimi.ai", "/coding/v1/usages"),
+    ("api.kimi.ai", "/coding/v1/me"),
     ("cli-chat-proxy.grok.com", "/v1/billing"),
     ("daily-cloudcode-pa.googleapis.com", "/v1internal:retrieveUserQuotaSummary"),
     ("daily-cloudcode-pa.sandbox.googleapis.com", "/v1internal:retrieveUserQuotaSummary"),
@@ -33,6 +43,18 @@ def allowed_api_call_url(url: str) -> bool:
     host = parsed.hostname.lower()
     path = parsed.path
     return any(host == allowed_host and path == allowed_path for allowed_host, allowed_path in _API_CALL_ALLOWLIST)
+
+
+def allowed_configured_api_call_url(url: str) -> bool:
+    """``generic.probes`` 专用放行：URL 只来自配置文件，永远不来自聊天输入。
+
+    与 :func:`allowed_api_call_url` 的白名单不同，这里不限定主机与路径（用户要在
+    配置里声明任意上游探测），但仍要求绝对 URL 且带主机名，避免相对路径或空地址。
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    return True
 
 
 class CPAError(Exception):
@@ -222,9 +244,21 @@ class ManagementClient:
         header: dict[str, str] | None = None,
         data: str | None = None,
         timeout: float | None = None,
+        allow_configured: bool = False,
     ) -> dict[str, Any]:
-        """内部代发上游请求。不要把原始 body 回传到聊天。"""
-        if not allowed_api_call_url(url):
+        """内部代发上游请求。不要把原始 body 回传到聊天。
+
+        ``allow_configured=True`` 只给 ``generic.probes`` 使用：URL 来自配置文件
+        而非聊天输入，因此跳过内置白名单（协议不限）。调用方必须保证 URL 不可能
+        被终端用户控制。
+        """
+        if allow_configured:
+            if not allowed_configured_api_call_url(url):
+                raise CPAError("generic.probes 的 url 必须是带主机名的绝对地址。")
+            if url not in _logged_configured_urls:
+                _logged_configured_urls.add(url)
+                logger.warning("QuotaNoa 正在按 generic.probes 配置探测非白名单上游：%s", url)
+        elif not allowed_api_call_url(url):
             raise CPAError("拒绝调用未列入额度白名单的上游地址。")
         payload: dict[str, Any] = {
             "auth_index": auth_index,
@@ -238,6 +272,31 @@ class ManagementClient:
         result = await self.request_json("POST", "/api-call", json=payload, timeout=timeout)
         return result if isinstance(result, dict) else {}
 
+    async def quota_fetch(
+        self,
+        auth_index: str,
+        *,
+        plugin_id: str = "",
+        provider: str = "",
+    ) -> dict[str, Any]:
+        """``POST /quota/fetch``：CPA 的厂商无关归一化额度。
+
+        没有可用额度 provider 时 CPA 返回 ``501``；这里映射为**空字典**而不是
+        异常，让 :func:`cpa.generic.fill_generic` 能继续降级到信号 / 探测。
+        """
+        body: dict[str, Any] = {"auth_index": auth_index}
+        if plugin_id:
+            body["plugin_id"] = plugin_id
+        if provider:
+            body["provider"] = provider
+        try:
+            data = await self.request_json("POST", "/quota/fetch", json=body)
+        except CPAError as exc:
+            if "HTTP 501" in str(exc):
+                return {}
+            raise
+        return data if isinstance(data, dict) else {}
+
     async def list_plugins(self) -> list[dict[str, Any]]:
         data = await self.request_json("GET", "/plugins")
         plugins = data.get("plugins") if isinstance(data, dict) else None
@@ -246,6 +305,9 @@ class ManagementClient:
 
 _clients: dict[str, ManagementClient] = {}
 _retired: list[ManagementClient] = []
+
+#: 已告警过的 generic.probes 非白名单上游（避免每次查询都刷日志）。
+_logged_configured_urls: set[str] = set()
 
 
 def get_client(name: str) -> ManagementClient:
