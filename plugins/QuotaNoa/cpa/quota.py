@@ -30,12 +30,14 @@ from ..model import (
     format_freshness,
     format_reset_zh,
     group_window_ids_by_plan,
+    normalize_platform_token,
     prefix_instance,
     sort_windows,
     stamp_instance,
     window_is_used,
 )
 from .format import display_name, is_cooling, is_unhealthy
+from .generic import fill_generic
 
 #: 平台别名/标题/顺序统一来自根模型（含 volcengine），避免多份来源。
 PLATFORM_ALIASES = CHANNEL_ALIASES
@@ -97,8 +99,9 @@ def normalize_platform(value: str) -> str:
 
 
 def platform_of(file: dict[str, Any]) -> str:
-    raw = str(file.get("provider") or file.get("type") or "").strip().lower().replace("_", "-")
-    return PLATFORM_ALIASES.get(raw, "other")
+    """凭证 → 平台键。已知渠道归一为 canonical 名；未知 provider 保留为动态 token。"""
+    raw = str(file.get("provider") or file.get("type") or "").strip()
+    return normalize_platform_token(raw)
 
 
 def is_platform_query(value: str) -> bool:
@@ -654,6 +657,8 @@ async def _one_account(
                 await _fill_antigravity(client, cfg, report)
             elif platform == "gemini-cli":
                 await _fill_gemini(client, cfg, report)
+            else:
+                await fill_generic(client, cfg, file, report)
         except CPAError as exc:
             report.error = str(exc)
             report.status = "error"
@@ -763,19 +768,43 @@ async def _fill_kimi(client: ManagementClient, cfg: CpaInstance, report: Account
         cfg,
         report,
         "GET",
-        "https://api.kimi.com/coding/v1/usages",
+        KIMI_USAGES_URL,
         {"Authorization": "Bearer $TOKEN$"},
     )
-    if payload is None:
-        return
-    report.windows = sort_windows(parse_kimi_usage(payload))
-    report.status = _status_from_windows(report.windows, report)
-    report.error = ""
-    if not report.subscription_expires_label:
-        exp_ts, exp_label = extract_subscription_expiry(payload)
-        if exp_label:
-            report.subscription_expires_at = exp_ts
-            report.subscription_expires_label = exp_label
+    if payload is not None:
+        report.windows = sort_windows(parse_kimi_usage(payload))
+        report.status = _status_from_windows(report.windows, report)
+        report.error = ""
+        if not report.subscription_expires_label:
+            exp_ts, exp_label = extract_subscription_expiry(payload)
+            if exp_label:
+                report.subscription_expires_at = exp_ts
+                report.subscription_expires_label = exp_label
+    await _kimi_membership(client, cfg, report)
+
+
+async def _kimi_membership(client: ManagementClient, cfg: CpaInstance, report: AccountQuota) -> None:
+    """best-effort 拉取 Kimi 会员档位；失败不改状态，绝不影响额度条。"""
+    saved_status = report.status
+    saved_error = report.error
+    try:
+        payload = await _upstream_json(
+            client,
+            cfg,
+            report,
+            "GET",
+            KIMI_ME_URL,
+            {"Authorization": "Bearer $TOKEN$", "accept": "*/*"},
+        )
+        if payload is not None:
+            plan = parse_kimi_membership(payload)
+            if plan:
+                report.plan = plan
+    except Exception:  # noqa: BLE001 - 会员信息只是加成，任何失败都不该冒泡
+        pass
+    finally:
+        report.status = saved_status
+        report.error = saved_error
 
 
 async def _fill_xai(client: ManagementClient, cfg: CpaInstance, report: AccountQuota) -> None:
@@ -920,22 +949,199 @@ def parse_codex_usage(payload: dict[str, Any]) -> tuple[list[QuotaWindow], str]:
     return sort_windows([item for item in windows if item]), _sanitize_plan(plan)
 
 
+KIMI_USAGES_URL = "https://api.kimi.com/coding/v1/usages"
+KIMI_ME_URL = "https://api.kimi.com/coding/v1/me"
+
+#: ``usages`` 键 → (窗口 id, 展示名)。未列出的键按周期关键字自动推断。
+_KIMI_USAGE_WINDOWS: dict[str, tuple[str, str]] = {
+    "limit_5h": ("kimi-5h", "5h"),
+    "limit_week": ("kimi-week", "周额度"),
+    "limit_month": ("kimi-month", "月额度"),
+    "limit_month_total": ("kimi-month", "月额度"),
+    "limit_month_code": ("kimi-month-code", "月额度（代码）"),
+}
+
+#: ``limits[].window.timeUnit`` → 推断出的周期窗口 id 与展示名。
+_KIMI_PERIOD_BY_UNIT: dict[str, tuple[str, str]] = {
+    "5h": ("kimi-5h", "5h"),
+    "hour": ("kimi-hour", "小时额度"),
+    "day": ("kimi-day", "日额度"),
+    "week": ("kimi-week", "周额度"),
+    "month": ("kimi-month", "月额度"),
+}
+
+
+def _kimi_period(duration: Any, time_unit: Any) -> tuple[str, str]:
+    """把 ``limits[].window`` 的 ``duration`` + ``timeUnit`` 换算为周期窗口。"""
+    length = _number(duration)
+    unit = str(time_unit or "").strip().upper().replace("TIME_UNIT_", "")
+    if length is None or length <= 0:
+        return "", ""
+    if unit in {"SECONDS", "SECOND"}:
+        hours = length / 3600.0
+    elif unit in {"DAYS", "DAY"}:
+        hours = length * 24.0
+    elif unit in {"WEEKS", "WEEK"}:
+        hours = length * 24.0 * 7.0
+    elif unit in {"HOURS", "HOUR"}:
+        hours = length
+    else:
+        hours = length / 60.0
+    if abs(hours - 5) < 0.5:
+        return _KIMI_PERIOD_BY_UNIT["5h"]
+    if abs(hours - 24) < 1:
+        return _KIMI_PERIOD_BY_UNIT["day"]
+    if abs(hours - 24 * 7) < 2:
+        return _KIMI_PERIOD_BY_UNIT["week"]
+    if abs(hours - 24 * 30) < 24:
+        return _KIMI_PERIOD_BY_UNIT["month"]
+    if hours < 24:
+        return _KIMI_PERIOD_BY_UNIT["hour"]
+    return "", ""
+
+
+def parse_kimi_membership(payload: dict[str, Any]) -> str:
+    """从 ``GET /coding/v1/me`` 响应提取会员档位。
+
+    优先 ``user_level_name``（如 ``"Plus"``），缺失时回落 ``user_level`` 数值，
+    再回落 ``goods_version``；均无可用值返回空串。
+    """
+    if not isinstance(payload, dict):
+        return ""
+    name = _sanitize_plan(payload.get("user_level_name") or payload.get("userLevelName"))
+    if name:
+        return name
+    level = _number(payload.get("user_level") or payload.get("userLevel"))
+    if level is not None and level > 0:
+        return f"Level {level:g}"
+    version = payload.get("goods_version") or payload.get("goodsVersion")
+    return _sanitize_plan(version)
+
+
 def parse_kimi_usage(payload: dict[str, Any]) -> list[QuotaWindow]:
-    windows: list[QuotaWindow] = []
-    usage = payload.get("usage")
-    if isinstance(usage, dict):
-        windows.append(_kimi_window("usage", "用量", usage))
+    """解析 Kimi ``/coding/v1/usages`` 响应。
+
+    口径：
+
+    - ``usages`` 字典**逐键**处理（不写死键名），未知 / 未来新增键按周期关键字
+      自动推断窗口名，保证会员类型变更带来的新窗口无需改代码；
+    - ``limits[]`` 通过 ``window.duration`` + ``timeUnit`` 推出周期，**同周期只补
+      绝对量**（``remaining`` / ``limit``），不重复出条；无对应周期的独立成条。
+    """
+    windows: dict[str, QuotaWindow] = {}
+
+    usages = payload.get("usages")
+    if isinstance(usages, dict):
+        for key, value in usages.items():
+            if not isinstance(value, dict):
+                continue
+            mapped = _KIMI_USAGE_WINDOWS.get(str(key))
+            if mapped:
+                window_id, label = mapped
+            else:
+                window_id = f"kimi-{re.sub(r'[^a-z0-9]+', '-', str(key).lower()).strip('-')}"[:48]
+                label = _kimi_label_from_key(str(key))
+            ratio = _first_number(value.get("used_ratio"), value.get("usedRatio"))
+            reset_value = value.get("reset_time") or value.get("resetTime") or value.get("reset_at")
+            window = QuotaWindow(
+                id=window_id,
+                label=label,
+                reset_label=_iso_reset(reset_value),
+                reset_at=_parse_ts(str(reset_value)) if reset_value else None,
+            )
+            if ratio is not None:
+                percent = _clamp(ratio * 100.0 if ratio <= 1 else ratio)
+                window.used_percent = percent
+                window.remaining_percent = _clamp(100.0 - percent)
+            if window.used_percent is not None or window.remaining_percent is not None:
+                windows[window_id] = window
+
     limits = payload.get("limits")
     if isinstance(limits, list):
         for index, item in enumerate(limits):
             if not isinstance(item, dict):
                 continue
-            detail = item.get("detail") if isinstance(item.get("detail"), dict) else item
-            label = str(item.get("title") or item.get("name") or item.get("scope") or f"限额{index + 1}")
-            windows.append(_kimi_window(f"limit-{index}", label, detail if isinstance(detail, dict) else item))
+            raw_detail = item.get("detail")
+            detail: dict[str, Any] = raw_detail if isinstance(raw_detail, dict) else item
+            raw_window = item.get("window")
+            window_spec: dict[str, Any] = raw_window if isinstance(raw_window, dict) else {}
+            period_id, period_label = _kimi_period(
+                _first_number(
+                    window_spec.get("duration"), item.get("duration"), detail.get("duration")
+                ),
+                _first_str(
+                    window_spec.get("timeUnit"), item.get("timeUnit"), detail.get("timeUnit")
+                ),
+            )
+            explicit_label = _first_str(item.get("title"), item.get("name"), item.get("scope"))
+            window_id = period_id or f"limit-{index}"
+            label = explicit_label or period_label or f"限额{index + 1}"
+
+            limit = _number(detail.get("limit"))
+            remaining = _number(detail.get("remaining"))
+            used = _number(detail.get("used"))
+            if used is None and limit is not None and remaining is not None:
+                used = limit - remaining
+            reset_value = detail.get("resetTime") or detail.get("reset_time") or detail.get("resetAt")
+
+            existing = windows.get(window_id)
+            if existing is not None:
+                # 同周期已有百分比口径（usages）：只补绝对量，尊重既有的已用比例。
+                if remaining is not None:
+                    existing.remaining = remaining
+                if limit is not None:
+                    existing.limit = limit
+                if explicit_label and not period_label:
+                    existing.label = explicit_label
+                continue
+
+            window = QuotaWindow(
+                id=window_id,
+                label=label,
+                remaining=remaining,
+                limit=limit,
+                reset_label=_iso_reset(reset_value),
+                reset_at=_parse_ts(str(reset_value)) if reset_value else None,
+            )
+            if remaining is not None and limit:
+                window.remaining_percent = _clamp(remaining / limit * 100.0)
+                window.used_percent = _clamp(100.0 - window.remaining_percent)
+            elif used is not None and limit:
+                window.used_percent = _clamp(used / limit * 100.0)
+                window.remaining_percent = _clamp(100.0 - window.used_percent)
+                window.remaining = (limit - used) if remaining is None else remaining
+            elif used is not None:
+                window.used_percent = _clamp(used)
+                window.remaining_percent = _clamp(100.0 - window.used_percent)
+            windows[window_id] = window
+
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        windows["usage"] = _kimi_window("usage", "用量", usage)
+
     return sort_windows(
-        [item for item in windows if item.used_percent is not None or item.remaining is not None]
+        [
+            item
+            for item in windows.values()
+            if item.used_percent is not None
+            or item.remaining_percent is not None
+            or item.remaining is not None
+        ]
     )
+
+
+def _kimi_label_from_key(key: str) -> str:
+    """未知 ``usages`` 键 → 展示名（按周期关键字推断）。"""
+    blob = key.lower().replace("_", "-")
+    if "5h" in blob or "five" in blob or "hour" in blob:
+        return "5h"
+    if "week" in blob:
+        return "周额度"
+    if "month" in blob:
+        return "月额度"
+    if "day" in blob:
+        return "日额度"
+    return key.replace("limit-", "").replace("_", " ").strip() or "额度"
 
 
 def _slugify_grok_product(name: str) -> str:
@@ -1299,6 +1505,8 @@ def _format_platform(section: PlatformQuota, account_limit: int) -> list[str]:
 
 
 def _window_text(window: QuotaWindow, *, compact: bool = False) -> str:
+    if window.kind == "metric":
+        return f"{window.label} {window.reset_note or '-'}"
     if window_is_used(window) and window.used_percent is not None:
         body = f"已使用 {window.used_percent:.0f}%"
     elif window.remaining_percent is not None:
@@ -1331,6 +1539,8 @@ def _status_from_windows(windows: list[QuotaWindow], report: AccountQuota) -> st
         return "disabled"
     percents = [w.remaining_percent for w in windows if w.remaining_percent is not None]
     if not percents:
+        if any(w.kind == "metric" for w in windows):
+            return "ok"
         return report.status or "unknown"
     lowest = min(percents)
     if lowest <= 0:
