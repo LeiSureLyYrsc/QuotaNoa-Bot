@@ -25,7 +25,7 @@ from ..cpa.format import (
 )
 from ..cpa.quota import platform_of
 from ..help import HelpDoc
-from ..model import normalize_channel
+from ..model import platform_key
 from ..render.help_page import render_help_images
 from ..render.html import RenderError
 
@@ -36,9 +36,10 @@ except Exception:  # pragma: no cover
 
     logger = logging.getLogger("QuotaNoa.commands.common")
 
-#: CPA 平台/渠道关键字（供 alias set 校验渠道名时复用）。
+#: 渠道关键字提示（供 alias set 校验渠道名时复用）。
 KNOWN_CHANNELS = (
     "claude / codex(gpt, openai) / antigravity(反重力, agy) / kimi / xai / gemini-cli / 火山(volcengine, ark) / workbuddy(wb) / qoder"
+    "；也接受未适配 provider 名（如 devin / iflow）"
 )
 
 
@@ -151,7 +152,7 @@ async def _require_one(instance: str, query: str) -> dict[str, Any]:
 
 
 async def _require_platform_account(instance: str, provider: str, query: str) -> dict[str, Any]:
-    platform = normalize_channel(provider)
+    platform = platform_key(provider)
     if not platform:
         await UniMessage(
             f"未知渠道「{provider}」。用法：/quotanoa alias set <渠道> <邮箱> <别名>\n"
@@ -333,7 +334,7 @@ def _same_physical_credential(matched: list[tuple[str, dict[str, Any]]]) -> bool
 
 
 async def _require_platform_account_across(provider: str, query: str) -> tuple[str, dict[str, Any]]:
-    platform = normalize_channel(provider)
+    platform = platform_key(provider)
     if not platform:
         await UniMessage(
             f"未知渠道「{provider}」。用法：/quotanoa alias set <渠道> <邮箱> <别名>\n"

@@ -32,7 +32,7 @@ from ..cpa.quota import (
     platform_of,
 )
 from ..help import parse_help, quota_help_text
-from ..model import LOCAL_CHANNELS, format_freshness, is_all_channels, normalize_channel
+from ..model import LOCAL_CHANNELS, format_freshness, is_all_channels, platform_key
 from ..query import QuotaSelection, TEXT_FLAGS, parse_quota_command, strip_quota_head, tokenize
 from ..render.html import RenderError, render_board_images
 from ..volcengine.provider import collect_board as collect_volcengine_board
@@ -120,7 +120,7 @@ def _resolve_query_plan(configured, entry: str) -> list[_QueryUnit]:
     if entry == "cpa":
         units: list[_QueryUnit] = [_QueryUnit("cpa_all")]
         for raw in configured:
-            channel = normalize_channel(raw)
+            channel = platform_key(raw)
             # 全部 CPA 平台已覆盖 CPA 渠道，只需追加本地渠道。
             if channel and channel in _LOCAL_CHANNEL_SET:
                 units.append(_QueryUnit("local", channel))
@@ -128,7 +128,7 @@ def _resolve_query_plan(configured, entry: str) -> list[_QueryUnit]:
     units = [_QueryUnit("local", ch) for ch in LOCAL_CHANNELS]
     seen_cpa: set[str] = set()
     for raw in configured:
-        channel = normalize_channel(raw)
+        channel = platform_key(raw)
         # 本地渠道已在默认集中，只有 CPA 渠道需要额外查询。
         if not channel or channel in _LOCAL_CHANNEL_SET or channel in seen_cpa:
             continue
@@ -866,14 +866,14 @@ async def _instance_quota_board(instance: str, selection: QuotaSelection) -> Quo
 
 
 def _result_channels(item: QuotaBoard | str, name: str) -> list[str]:
-    """该结果条目涉及的 canonical 渠道列表。
+    """该结果条目涉及的平台键列表。
 
     board 取其平台名（本地渠道为单平台板、CPA 全平台板含多平台）；
     字符串（错误/回退文字）按标签归一（如「火山」→ ``volcengine``）。
     """
     if isinstance(item, QuotaBoard):
         return [section.platform for section in item.platforms]
-    canonical = normalize_channel(name)
+    canonical = platform_key(name)
     return [canonical] if canonical else []
 
 
