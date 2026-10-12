@@ -55,6 +55,7 @@ _client_last_error: str = ""
 _client_loaded_path: Path | None = None
 
 _legacy_split_warned = False
+_legacy_admin_warned = False
 
 _env_config: Config | None = None
 _path_override: Path | None = None
@@ -226,7 +227,7 @@ def _load_main(
     path: Path, signature: tuple[int, int] | None, *, generate: bool
 ) -> tuple[ConfigSnapshot | None, str]:
     """读取并解析主配置；失败返回 ``(None, 错误消息)``（fail-soft）。"""
-    global _legacy_split_warned
+    global _legacy_split_warned, _legacy_admin_warned
     try:
         if signature is None:
             if not generate:
@@ -237,6 +238,18 @@ def _load_main(
                 _warn_legacy(path)
         else:
             raw = read_config_file(path)
+        if (
+            isinstance(raw, Mapping)
+            and isinstance(raw.get("cpa"), Mapping)
+            and "admins" in raw["cpa"]
+            and not _legacy_admin_warned
+        ):
+            _legacy_admin_warned = True
+            logger.warning(
+                "主配置 {} 中的 cpa.admins 已被忽略；如需保留这些管理员，请用 /quotanoa admin add <用户ID> 重新添加，"
+                "或手工在顶层 quotanoa_admin 写入。",
+                path,
+            )
         if ("server" in raw or "clients" in raw) and not _legacy_split_warned:
             _legacy_split_warned = True
             logger.warning(

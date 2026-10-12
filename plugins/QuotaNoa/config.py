@@ -8,8 +8,8 @@ NoneBot 的 `.env` 只保留 ``QUOTANOA_CONFIG_FILE`` 与 ``QUOTANOA_CLIENT_CONF
 ``data/quotanoa_client.json``（``server`` 段 + 顶层 ``clients``），不再写入主配置。
 
 CPA 支持多个实例：``cpa.instances[]`` 中每一项都是一个独立连接，自带连接与
-额度查询设置。``cpa.admins`` / ``cpa.codex_refresh_admin`` 是全局权限名单，
-不随实例区分。
+额度查询设置。``cpa.codex_refresh_admin`` 是全局权限名单，不随实例区分；
+``quotanoa_admin`` 是顶层权限名单。
 
 本模块只做“纯数据”工作：解析、校验、默认值、原子写入。热重载与快照管理在
 ``state.py``。
@@ -223,10 +223,9 @@ class CpaInstance:
 class CpaConfig:
     """CPA 全局设置 + 多个实例。
 
-    ``admins`` / ``codex_refresh_admin`` 是全局权限名单；``instances`` 是连接列表。
+    ``codex_refresh_admin`` 是全局权限名单；``instances`` 是连接列表。
     """
 
-    admins: tuple[str, ...] = ()
     codex_refresh_admin: tuple[str, ...] = ()
     instances: tuple[CpaInstance, ...] = ()
 
@@ -435,6 +434,8 @@ class ConfigSnapshot:
     render: RenderConfig = field(default_factory=RenderConfig)
     refreshcache: RefreshCacheConfig = field(default_factory=RefreshCacheConfig)
     onebot_v11_feature: OnebotV11FeatureConfig = field(default_factory=OnebotV11FeatureConfig)
+    #: 顶层权限名单（全局，不随实例区分）。
+    quotanoa_admin: tuple[str, ...] = ()
     #: 渠道置顶顺序（通用，对所有适配器生效）：命中的渠道按此顺序排在最前，
     #: 未命中当前查询的渠道自动忽略；值已归一到 canonical 渠道名。
     pin_channel: tuple[str, ...] = ()
@@ -466,7 +467,6 @@ class ConfigSnapshot:
     def to_dict(self) -> dict[str, Any]:
         return {
             "cpa": {
-                "admins": list(self.cpa.admins),
                 "codex_refresh_admin": list(self.cpa.codex_refresh_admin),
                 "instances": [
                     {
@@ -531,6 +531,7 @@ class ConfigSnapshot:
             "onebot-v11-feature": {
                 "forward-message": self.onebot_v11_feature.forward_message,
             },
+            "quotanoa_admin": list(self.quotanoa_admin),
             "pin-channel": list(self.pin_channel),
             "quotanoa_additional_channel": list(self.quotanoa_additional_channel),
             "cpa_additional_channel": list(self.cpa_additional_channel),
@@ -609,7 +610,6 @@ def _parse_cpa(raw: Any) -> CpaConfig:
             seen.add(instance.name)
             instances.append(instance)
     return CpaConfig(
-        admins=_as_str_list(data.get("admins")),
         codex_refresh_admin=_as_str_list(data.get("codex_refresh_admin")),
         instances=tuple(instances),
     )
@@ -784,6 +784,7 @@ def snapshot_from_raw(raw: Mapping[str, Any]) -> ConfigSnapshot:
         render=_parse_render(raw.get("render")),
         refreshcache=_parse_refreshcache(raw.get("refreshcache")),
         onebot_v11_feature=_parse_onebot_v11_feature(raw.get("onebot-v11-feature")),
+        quotanoa_admin=_as_str_list(raw.get("quotanoa_admin")),
         pin_channel=_parse_pin_channel(raw.get("pin-channel")),
         quotanoa_additional_channel=_parse_additional_channels(
             raw.get("quotanoa_additional_channel")

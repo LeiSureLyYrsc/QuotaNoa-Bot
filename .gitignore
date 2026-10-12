@@ -33,12 +33,17 @@ tests/
 
 # Test scratch dirs (some tests leak mkdtemp dirs into the working dir)
 /tmp*/
+tmp*/
 
-# Deepwork session state (git-local)
-.slim/deepwork/
+# Local agent / session state (git-local)
+.omo/
+.slim/
+.ivideo-diag/
+design/
 
 # Logs / OS / IDE
 *.log
+logs/
 .DS_Store
 Thumbs.db
 .idea/
