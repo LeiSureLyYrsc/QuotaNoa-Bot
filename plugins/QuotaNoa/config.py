@@ -35,7 +35,7 @@ from .model import (
     ALL_CHANNELS_TOKEN,
     is_all_channels,
     is_channel_name,
-    normalize_channel,
+    platform_key,
 )
 from .protocol import normalize_client_name, valid_client_name
 
@@ -322,6 +322,35 @@ class RefreshCacheConfig:
 
 
 @dataclass(frozen=True)
+class GenericProbeConfig:
+    """单条声明式额度探测（语法镜像 CPA 凭证 metadata 的 ``quota_probe``）。
+
+    URL / header / data 里可用 ``$TOKEN$`` 占位，由 CPA 替换为所选凭证的令牌。
+    ``mapping`` 把任意上游 JSON 映射为统一额度（见 ``cpa/generic.py``）。
+    """
+
+    url: str = ""
+    method: str = "GET"
+    header: Mapping[str, str] = field(default_factory=dict)
+    data: str = ""
+    mapping: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GenericConfig:
+    """泛式额度适配（未专门适配的 provider 也能显示额度条）。
+
+    - ``use_quota_fetch``：优先用 CPA 通用 ``POST /quota/fetch``（零配置）。
+    - ``use_signals``：其次用 ``/auth-files`` 的 ``quota.signals`` 被动观测。
+    - ``probes``：最后按渠道名执行这里声明的探测（键为 dynamic 渠道 token）。
+    """
+
+    use_quota_fetch: bool = True
+    use_signals: bool = True
+    probes: Mapping[str, GenericProbeConfig] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class OnebotV11FeatureConfig:
     """OneBot V11 适配器专属特性开关。
 
@@ -433,6 +462,7 @@ class ConfigSnapshot:
     qoder: QoderConfig = field(default_factory=QoderConfig)
     render: RenderConfig = field(default_factory=RenderConfig)
     refreshcache: RefreshCacheConfig = field(default_factory=RefreshCacheConfig)
+    generic: GenericConfig = field(default_factory=GenericConfig)
     onebot_v11_feature: OnebotV11FeatureConfig = field(default_factory=OnebotV11FeatureConfig)
     #: 顶层权限名单（全局，不随实例区分）。
     quotanoa_admin: tuple[str, ...] = ()
@@ -455,7 +485,7 @@ class ConfigSnapshot:
         优先级：``refreshcache.channels[渠道]`` → ``fallback``（如 CPA 实例级
         ``quota_cache_ttl``，``<= 0`` 视为未设置）→ ``refreshcache.default``。
         """
-        canonical = normalize_channel(channel) if channel else ""
+        canonical = platform_key(channel) if channel else ""
         if canonical:
             ttl = self.refreshcache.channels.get(canonical)
             if ttl is not None:
@@ -523,6 +553,20 @@ class ConfigSnapshot:
                 "default": self.refreshcache.default,
                 "channels": dict(self.refreshcache.channels),
             },
+            "generic": {
+                "use_quota_fetch": self.generic.use_quota_fetch,
+                "use_signals": self.generic.use_signals,
+                "probes": {
+                    name: {
+                        "url": probe.url,
+                        "method": probe.method,
+                        "header": dict(probe.header),
+                        "data": probe.data,
+                        "mapping": dict(probe.mapping),
+                    }
+                    for name, probe in self.generic.probes.items()
+                },
+            },
             "render": {
                 "theme": self.render.theme,
                 "cards_per_row": self.render.cards_per_row,
@@ -576,10 +620,10 @@ def _parse_cpa_instance(entry: Any) -> CpaInstance | None:
 
 
 def _parse_additional_channels(value: Any) -> tuple[str, ...]:
-    """解析额外渠道列表：归一到 canonical 渠道名，去重，丢弃未知项。
+    """解析额外渠道列表：归一为平台键，去重，丢弃空项。
 
-    若列表里含 ``all``（或 ``*``），直接返回 ``("all",)`` 表示全部渠道
-    （等价于命令的 ``/quotanoa all``），不再展开其它条目。
+    接受内置渠道与动态渠道。若列表里含 ``all``（或 ``*``），直接返回 ``("all",)``
+    表示全部渠道（等价于命令的 ``/quotanoa all``），不再展开其它条目。
     """
     items = _as_str_list(value)
     if any(is_all_channels(item) for item in items):
@@ -587,11 +631,11 @@ def _parse_additional_channels(value: Any) -> tuple[str, ...]:
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in items:
-        canonical = normalize_channel(item)
-        if not canonical or canonical in seen:
+        key = platform_key(item)
+        if not key or key in seen:
             continue
-        seen.add(canonical)
-        cleaned.append(canonical)
+        seen.add(key)
+        cleaned.append(key)
     return tuple(cleaned)
 
 
@@ -725,11 +769,46 @@ def _parse_refreshcache(raw: Any) -> RefreshCacheConfig:
     default = max(0.0, _as_float(data.get("default"), DEFAULT_REFRESH_CACHE_TTL))
     channels: dict[str, float] = {}
     for key, value in _as_mapping(data.get("channels")).items():
-        canonical = normalize_channel(str(key))
+        canonical = _platform_key(str(key))
         if not canonical:
             continue
         channels[canonical] = max(0.0, _as_float(value, default))
     return RefreshCacheConfig(default=default, channels=channels)
+
+
+def _platform_key(value: str) -> str:
+    """渠道键归一：接受内置渠道与动态渠道；无效键返回空串。"""
+    return platform_key(value)
+
+
+def _parse_generic_probe(raw: Any) -> GenericProbeConfig:
+    data = _as_mapping(raw)
+    header = {str(key): str(value) for key, value in _as_mapping(data.get("header")).items()}
+    header.update({str(key): str(value) for key, value in _as_mapping(data.get("headers")).items()})
+    mapping = _as_mapping(data.get("mapping"))
+    return GenericProbeConfig(
+        url=_as_str(data.get("url")),
+        method=(_as_str(data.get("method"), "GET") or "GET").upper(),
+        header=header,
+        data=_as_str(data.get("data")),
+        mapping=dict(mapping),
+    )
+
+
+def _parse_generic(raw: Any) -> GenericConfig:
+    """解析 ``generic`` 段；容忍缺失与类型偏差，探测条目按渠道键归一。"""
+    data = _as_mapping(raw)
+    probes: dict[str, GenericProbeConfig] = {}
+    for key, value in _as_mapping(data.get("probes")).items():
+        channel = _platform_key(str(key))
+        if not channel:
+            continue
+        probes[channel] = _parse_generic_probe(value)
+    return GenericConfig(
+        use_quota_fetch=_as_bool(data.get("use_quota_fetch"), True),
+        use_signals=_as_bool(data.get("use_signals"), True),
+        probes=probes,
+    )
 
 
 def _parse_onebot_v11_feature(raw: Any) -> OnebotV11FeatureConfig:
@@ -751,19 +830,20 @@ def _parse_onebot_v11_feature(raw: Any) -> OnebotV11FeatureConfig:
 
 
 def _parse_pin_channel(value: Any) -> tuple[str, ...]:
-    """解析 ``pin-channel``：归一到 canonical 渠道名，按原顺序去重，丢弃未知项。
+    """解析 ``pin-channel``：归一为平台键，按原顺序去重丢弃空项。
 
-    这是通用顺序配置（非 ``all`` 语义），故不含 ``quotanoa_additional_channel``
-    里对 ``all`` 的特判。
+    接受内置渠道与动态渠道（未适配 provider 的净化 token），这样用户可以把
+    任意 provider 置顶。这是通用顺序配置（非 ``all`` 语义），故不含
+    ``quotanoa_additional_channel`` 里对 ``all`` 的特判。
     """
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in _as_str_list(value):
-        canonical = normalize_channel(item)
-        if not canonical or canonical in seen:
+        key = platform_key(item)
+        if not key or key in seen:
             continue
-        seen.add(canonical)
-        cleaned.append(canonical)
+        seen.add(key)
+        cleaned.append(key)
     return tuple(cleaned)
 
 
@@ -783,6 +863,7 @@ def snapshot_from_raw(raw: Mapping[str, Any]) -> ConfigSnapshot:
         qoder=_parse_qoder(raw.get("qoder")),
         render=_parse_render(raw.get("render")),
         refreshcache=_parse_refreshcache(raw.get("refreshcache")),
+        generic=_parse_generic(raw.get("generic")),
         onebot_v11_feature=_parse_onebot_v11_feature(raw.get("onebot-v11-feature")),
         quotanoa_admin=_as_str_list(raw.get("quotanoa_admin")),
         pin_channel=_parse_pin_channel(raw.get("pin-channel")),

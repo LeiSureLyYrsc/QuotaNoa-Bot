@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .model import PLATFORM_ORDER, channel_of, normalize_channel
+from .model import PLATFORM_ORDER, channel_of, platform_key
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
@@ -58,6 +58,7 @@ def default_aliases_dict() -> dict[str, Any]:
             "身份键可用 auth_index、凭证文件名（可省 .json）、邮箱，或其前缀。",
             f"“{GLOBAL_BUCKET}” 为全局桶：任何渠道自身桶未命中时回退到这里。",
             f"{CHANNEL_KEYWORDS_KEY}：自定义渠道查询关键字（只影响 /quotanoa 解析，不改出图/文本）。",
+            "值可写内置渠道名，也可写未适配 provider 名（如 devin / iflow）以启用泛式额度查询。",
             "保存后自动热重载：下一条 /quotanoa 即生效，无需重启。",
         ],
         CHANNEL_KEYWORDS_KEY: {"agy": "antigravity"},
@@ -203,7 +204,11 @@ def _normalize_store(data: Any) -> dict[str, dict[str, str]]:
 
 
 def _normalize_channel_keywords(data: Any) -> dict[str, str]:
-    """解析 ``channel_keywords`` 保留键：关键字 → canonical 渠道名。"""
+    """解析 ``channel_keywords`` 保留键：关键字 → 渠道名。
+
+    接受内置渠道与**未适配 provider 的动态 token**，因此可以给任意凭证
+    注册查询关键字（如 ``{"agy": "antigravity", "dv": "devin"}``）。
+    """
     if not isinstance(data, Mapping):
         return {}
     raw = data.get(CHANNEL_KEYWORDS_KEY)
@@ -214,8 +219,7 @@ def _normalize_channel_keywords(data: Any) -> dict[str, str]:
         keyword = str(key).strip()
         if not keyword:
             continue
-        # 渠道名必须能归一（内置别名表），否则忽略该条。
-        channel = normalize_channel(str(value))
+        channel = platform_key(str(value))
         if channel:
             cleaned[keyword.lower()] = channel
     return cleaned
