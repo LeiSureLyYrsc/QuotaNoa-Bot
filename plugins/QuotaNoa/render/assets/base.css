@@ -385,6 +385,14 @@ html, body {
   text-align: right;
 }
 
+.bar-metric .bar-meta {
+  padding: 2px 0;
+}
+
+.bar-metric .bar-val {
+  max-width: 55%;
+}
+
 .progress-track {
   height: 6px;
   border-radius: 9999px;

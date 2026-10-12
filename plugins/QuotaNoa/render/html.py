@@ -395,6 +395,16 @@ def _group_html(title: str, windows: list[QuotaWindow]) -> str:
 
 
 def _bar_html(window: QuotaWindow) -> str:
+    if window.kind == "metric":
+        return (
+            f'<div class="bar-item bar-metric">'
+            f'<div class="bar-meta">'
+            f'<span class="bar-label" title="{html.escape(window.label)}">{html.escape(window.label)}</span>'
+            f'<span class="bar-val">{html.escape(window.reset_note or window.reset_label or "-")}</span>'
+            f'</div>'
+            f'</div>'
+        )
+
     remain = window.remaining_percent
     used = window.used_percent
     is_grok_product = window_is_used(window)
@@ -459,7 +469,7 @@ def _grouped_windows(
     grouped: dict[str, list[QuotaWindow]] = {}
     order: list[str] = []
     for window in windows:
-        key = _group_key(window.id)
+        key = _group_key(window.id, window.label)
         if key not in grouped:
             grouped[key] = []
             order.append(key)
@@ -467,7 +477,7 @@ def _grouped_windows(
     return [(_GROUP_TITLES.get(key, key), sort_windows(grouped[key])) for key in order]
 
 
-def _group_key(window_id: str) -> str:
+def _group_key(window_id: str, label: str = "") -> str:
     if window_id.startswith("volc-agent-"):
         return "volc-agent"
     if window_id.startswith("volc-"):
@@ -484,7 +494,7 @@ def _group_key(window_id: str) -> str:
         return "code"
     if window_id.startswith("grok-") or window_id == "billing":
         return "xai"
-    if window_id.startswith("limit-") or window_id == "usage":
+    if window_id.startswith("limit-") or window_id.startswith("kimi-") or window_id == "usage":
         return "kimi"
     if window_id in {
         "five_hour",
@@ -497,7 +507,7 @@ def _group_key(window_id: str) -> str:
         "extra",
     }:
         return "claude"
-    return "other"
+    return label or window_id or "other"
 
 
 def build_platform_html(
