@@ -17,6 +17,7 @@ from . import config as config  # noqa: E402, F401  (注册 /quotanoa config)
 from . import client as client  # noqa: E402, F401  (注册 /quotanoa client 远程客户端管理)
 from . import wb as wb  # noqa: E402, F401  (注册 /quotanoa wb 网关管理)
 from . import qoder as qoder  # noqa: E402, F401  (注册 /quotanoa qoder 代理管理)
+from . import admin as admin  # noqa: E402, F401  (注册 /quotanoa admin)
 from . import cpa as cpa  # noqa: E402, F401  (注册 /cpa 管理根)
 
 

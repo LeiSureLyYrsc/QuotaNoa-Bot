@@ -39,7 +39,7 @@ from ..volcengine.provider import collect_board as collect_volcengine_board
 from ..wb.provider import collect_board as collect_workbuddy_board
 from ..qoder.provider import collect_board as collect_qoder_board
 
-from .common import CPA_ADMIN, _require_one_across, _text, _without, send_help
+from .common import QUOTANOA_ADMIN, _require_one_across, _text, _without, send_help
 
 try:
     from nonebot.log import logger
@@ -182,6 +182,13 @@ quota = on_alconna(
             help_text="配置查看与重载",
         ),
         Subcommand(
+            "admin",
+            Subcommand("list", help_text="列出管理员名单"),
+            Subcommand("add", Args["user", str], help_text="新增管理员：/quotanoa admin add <用户ID>"),
+            Subcommand("remove|rm|delete", Args["user", str], dest="remove", help_text="移除管理员：/quotanoa admin remove <用户ID>"),
+            help_text="管理员名单（仅超级用户）",
+        ),
+        Subcommand(
             "client",
             Subcommand("list", help_text="列出远程客户端与在线状态"),
             Subcommand(
@@ -284,7 +291,7 @@ quota = on_alconna(
             example="/quotanoa\n/quotanoa 火山\n/quotanoa claude\n/quotanoa claude Home\n/quotanoa --fresh\n/quotanoa cooling\n/quotanoa reset user@example.com\n/quotanoa alias set antigravity user@example.com AG-1\n/quotanoa volc add 火山主号 AK SK\n/quotanoa config show",
         ),
     ),
-    permission=CPA_ADMIN,
+    permission=QUOTANOA_ADMIN,
     auto_send_output=True,
     skip_for_unmatch=False,
     use_cmd_start=True,
